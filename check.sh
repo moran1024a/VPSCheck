@@ -4228,10 +4228,39 @@ show_menu() {
     echo "${C_Y}输入无效，请重新选择${C_0}" >&2
   done
 
-  if [ "$HAS_V4" -eq 1 ] && [ "$HAS_V6" -eq 1 ] && [ "$OPT_ONLY4" -eq 0 ] && [ "$OPT_ONLY6" -eq 0 ]; then
-    read -r -p "测试协议（回车=双栈，4=仅 IPv4，6=仅 IPv6）: " choice </dev/tty || exit 1
-    case "$choice" in 4) OPT_ONLY4=1 ;; 6) OPT_ONLY6=1 ;; esac
-  fi
+  [ $((OPT_ONLY4 + OPT_ONLY6)) -eq 0 ] && show_fam_menu
+}
+
+# 协议选择：自动按检测结果，或指定 IPv4 / IPv6
+show_fam_menu() {
+  local choice auto
+  if [ "$HAS_V4" -eq 1 ] && [ "$HAS_V6" -eq 1 ]; then auto="双栈"
+  elif [ "$HAS_V4" -eq 1 ]; then auto="IPv4"
+  else auto="IPv6"; fi
+  {
+    printf '\n'
+    ui_line '-'
+    ui_kv "IPv4" "${PUB4:-${C_D}未检测到${C_0}}"
+    ui_kv "IPv6" "${PUB6:-${C_D}未检测到${C_0}}"
+    ui_line '-'
+    printf '  1. 自动 %s\n' "${C_D}(按检测结果：${auto})${C_0}"
+    printf '  2. 仅 IPv4\n'
+    printf '  3. 仅 IPv6\n'
+    printf '  0. 退出\n'
+    ui_line '-'
+  } >&2
+  while :; do
+    read -r -p "测试协议（回车=自动）: " choice </dev/tty || exit 1
+    case "${choice// /}" in
+      ""|1) return 0 ;;
+      2) [ "$HAS_V4" -eq 1 ] && { OPT_ONLY4=1; return 0; }
+         echo "${C_Y}本机没有 IPv4 公网地址，请重新选择${C_0}" >&2 ;;
+      3) [ "$HAS_V6" -eq 1 ] && { OPT_ONLY6=1; return 0; }
+         echo "${C_Y}本机没有 IPv6 公网地址，请重新选择${C_0}" >&2 ;;
+      0) exit 0 ;;
+      *) echo "${C_Y}输入无效，请重新选择${C_0}" >&2 ;;
+    esac
+  done
 }
 
 # ==================== 主流程 ====================

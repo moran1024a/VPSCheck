@@ -24,7 +24,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/che
 bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/check.sh) -A -y
 ```
 
-不带检测项目参数时显示菜单（可多选，如 `2 3 5`；双栈机器会再问测哪个协议）：
+不带检测项目参数时显示菜单（可多选，如 `2 3 5`），选完后再选测试协议：自动（按检测到的公网地址，双栈即两种都测）/ 仅 IPv4 / 仅 IPv6，已用 `-4` / `-6` 指定时跳过：
 
 ```
 1. 全部检测   2. 网络信息   3. IP 质量   4. 所有回程
