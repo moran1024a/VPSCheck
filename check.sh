@@ -3557,7 +3557,7 @@ tcp_gather() {
 
 # 单元格：标签 延迟 延迟色 丢包 丢包色 标签宽 延迟宽 丢包宽（色：G/Y/R/D）
 tcp_cell() {
-  local label="$1" lat="$2" latc="$3" loss="$4" lossc="$5" lw="$6" tw="$7" sw="$8" l t s
+  local label="$1" lat="$2" latc="$3" loss="$4" lossc="$5" lw="$6" tw="$7" sw="$8" l t s lc
   local -A col=([G]="$C_G" [Y]="$C_Y" [R]="$C_R" [D]="$C_D")
   if [[ "$label" == *[^[:ascii:]]* ]]; then
     l=$(ui_pad "$label" "$lw")
@@ -3571,7 +3571,10 @@ tcp_cell() {
   fi
   printf -v t '%*s' "$tw" "$lat"
   printf -v s '%*s' "$sw" "$loss"
-  printf '%s%s%s %s%s%s %s%s%s' "$C_W" "$l" "$C_0" "${col[$latc]}" "$t" "$C_0" "${col[$lossc]}" "$s" "$C_0"
+  # 线路未识别 / 失败用暗色，与实测的延迟丢包颜色区分
+  lc="$C_W"
+  case "$label" in Hidden|failed|-|"$TCP_NOLABEL") lc="$C_D" ;; esac
+  printf '%s%s%s %s%s%s %s%s%s' "$lc" "$l" "$C_0" "${col[$latc]}" "$t" "$C_0" "${col[$lossc]}" "$s" "$C_0"
 }
 
 # 结果行 → 制表行：省份\t键\t标签\t延迟\t延迟色\t丢包\t丢包色，末行 #\t零丢包\t1-20%\t>20%
@@ -3612,7 +3615,7 @@ tcp_rows() {
 
 tcp_legend() {
   printf '  %s颜色: %s正常%s  %s延迟151-240ms或1-20%%重传%s  %s延迟>240ms或>20%%重传，或失败%s\n' \
-    "$C_D" "$C_G" "$C_0" "$C_Y" "$C_0" "$C_R" "$C_0"
+    "$C_D$C_I" "$C_I$C_G" "$C_0$C_D$C_I" "$C_I$C_Y" "$C_0$C_D$C_I" "$C_I$C_R" "$C_0"
 }
 
 tcp_summary() {  # 前缀 零丢包文字 z y h
@@ -3635,18 +3638,18 @@ tcp_show_carrier() {
   done < <(tcp_rows carrier "$route_file" "$result_file" "$nolabel" 5)
 
   ui_sub "$title"
-  tcp_summary "" "$zero_word" "$z" "$y" "$h"
+  tcp_summary "${C_C}统计${C_0}    " "$zero_word" "$z" "$y" "$h"
   [ "$fw" -eq 1 ] && printf '  %s由于服务商防火墙限制，延迟和丢包无法探测%s\n' "$C_R" "$C_0"
   row="  ${C_BOLD}${C_C}$(ui_pad "省份" 6)${C_0}  "
   for isp in 电信 联通 移动; do
-    [ "$isp" != "电信" ] && row+=" / "
-    row+="${C_C}$(ui_pad "$isp" 10) $(ui_pad "延迟" 5 r) $(ui_pad "丢包" 4 r)${C_0}"
+    [ "$isp" != "电信" ] && row+=" $C_D/$C_0 "
+    row+="$C_BOLD$C_C$(ui_pad "$isp" 10)$C_0 $C_C$C_I$(ui_pad "延迟" 5 r) $(ui_pad "丢包" 4 r)$C_0"
   done
   printf '%s\n' "$row"
   for prov in "${order[@]}"; do
     row="  ${C_C}$(ui_pad "$prov" 6)${C_0}  "
     for isp in 电信 联通 移动; do
-      [ "$isp" != "电信" ] && row+=" / "
+      [ "$isp" != "电信" ] && row+=" $C_D/$C_0 "
       row+="${cells["$prov|$isp"]:-$(tcp_cell "-" "-" D "-" D 10 5 4)}"
     done
     printf '%s\n' "$row"
@@ -3675,12 +3678,12 @@ tcp_show_edu() {
 
   ui_sub "教育网回程"
   for col in "${cols[@]}"; do
-    tcp_summary "$(ui_pad "$col" 13)" "零丢包" ${sums[$col]}
+    tcp_summary "$C_C$(ui_pad "$col" 13)$C_0" "零丢包" ${sums[$col]}
   done
   row="  ${C_BOLD}${C_C}$(ui_pad "省份" 6)${C_0}  "
   for col in "${cols[@]}"; do
-    [ "$n" -gt 0 ] && row+=" / "
-    row+="${C_C}$(ui_pad "$col" 18) $(ui_pad "延迟" 6 r) $(ui_pad "丢包" 6 r)${C_0}"
+    [ "$n" -gt 0 ] && row+=" $C_D/$C_0 "
+    row+="$C_BOLD$C_C$(ui_pad "$col" 18)$C_0 $C_C$C_I$(ui_pad "延迟" 6 r) $(ui_pad "丢包" 6 r)$C_0"
     n=$((n + 1))
   done
   printf '%s\n' "$row"
@@ -3688,7 +3691,7 @@ tcp_show_edu() {
     row="  ${C_C}$(ui_pad "$prov" 6)${C_0}  "
     n=0
     for col in "${cols[@]}"; do
-      [ "$n" -gt 0 ] && row+=" / "
+      [ "$n" -gt 0 ] && row+=" $C_D/$C_0 "
       row+="${cells["$prov|$col"]:-$(tcp_cell "-" "-" D "-" D 18 6 6)}"
       n=$((n + 1))
     done
