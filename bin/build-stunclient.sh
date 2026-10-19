@@ -48,5 +48,9 @@ if ! file "$out" | grep -q 'statically linked'; then
   echo "产物不是静态链接" >&2
   exit 1
 fi
-"$out" --help >/dev/null
+# --help 打印手册后以非 0 退出，按输出内容判断能否正常运行
+if ! "$out" --help 2>&1 | grep -q STUNCLIENT; then
+  echo "产物无法运行" >&2
+  exit 1
+fi
 sha256sum "$out"
