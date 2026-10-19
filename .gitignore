@@ -1,0 +1,8 @@
+# 检测报告（-o 输出）
+*.txt
+
+# 编辑器与系统文件
+.DS_Store
+*.swp
+.vscode/
+.idea/
