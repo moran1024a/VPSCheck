@@ -11,9 +11,10 @@
 
 set -eu
 
+# master 2026-02-13（1.2.16 之后）：兼容 OpenSSL 1.1 / 3，含过滤行为测试的修复。
+# 最后一个标签 version1.2.13 只支持 OpenSSL 1.0，无法编译。
 STUNTMAN_REPO="https://github.com/jselbie/stunserver.git"
-STUNTMAN_TAG="version1.2.13"
-STUNTMAN_COMMIT="137c2f096240a5adcafaae21a310669ef6a5a668"
+STUNTMAN_COMMIT="1582042ca33f747f88101fbadec4944714aa8bbb"
 
 case "$(uname -m)" in
   x86_64) arch=amd64 ;;
@@ -24,7 +25,9 @@ esac
 apk add --no-cache build-base boost-dev openssl-dev openssl-libs-static git file >/dev/null
 
 src=$(mktemp -d)
-git clone --quiet --depth 1 --branch "$STUNTMAN_TAG" "$STUNTMAN_REPO" "$src"
+git -C "$src" init --quiet
+git -C "$src" fetch --quiet --depth 1 "$STUNTMAN_REPO" "$STUNTMAN_COMMIT"
+git -C "$src" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
 actual=$(git -C "$src" rev-parse HEAD)
 if [ "$actual" != "$STUNTMAN_COMMIT" ]; then
   echo "源码提交不符：期望 $STUNTMAN_COMMIT，实际 $actual" >&2
