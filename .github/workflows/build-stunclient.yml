@@ -1,0 +1,40 @@
+# 编译 bin/ 下的 stunclient 静态二进制（手动触发）。
+# 只编译并上传构建产物，不提交任何内容；产物由维护者下载、核对后提交。
+name: build-stunclient
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 编译
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 \
+            sh bin/build-stunclient.sh
+
+      - name: 在 runner 上试运行（NAT 测试结果仅供参考）
+        run: |
+          bin=dist/stunclient_linux_${{ matrix.arch }}
+          sudo chown "$(id -u)" "$bin"
+          "$bin" --mode full --family 4 stun.voipgate.com 3478 || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stunclient_linux_${{ matrix.arch }}
+          path: dist/stunclient_linux_${{ matrix.arch }}
+          if-no-files-found: error
