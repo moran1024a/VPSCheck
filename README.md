@@ -123,7 +123,7 @@ bin/                                    stunclient 静态二进制、编译脚�
 - **[xykt/IPQuality](https://github.com/xykt/IPQuality)**（IP 质量）
   - 删除报告上传、运行统计、广告、JSON、多语言、IP 打码、代理 / 网卡参数、精简模式、菜单与依赖安装
   - DB-IP、TikTok、ChatGPT 请求区分 IPv4 / IPv6；邮局检测改用 `nc -4/-6` 并行检测，仅 root 时绑定本地 25 端口；25 端口「占用」不再误判出站连接
-  - DNS 黑名单超时单独统计，不计入「已标记」；查询失败的评分显示 `-`，不按低风险处理
+  - DNS 黑名单超时的库在第一遍结束后降低并发重查一次，仍超时的单独统计，不计入「已标记」；查询失败的评分显示「无」，不按低风险处理
 - **[ibsgss/TcpQuality](https://github.com/ibsgss/TcpQuality)**（TCP 回程）
   - 只保留三网 / 大包 / 教育网回程，探测与线路识别逻辑不变；教育网线路因不再向作者服务器查询跳点 ASN，只依据 Team Cymru 判断，个别线路标签可能与原版不同
   - 删除测速（单线程、Apple CDN、TOS、iPerf3）、国际互联、bpftrace / TCP_INFO 重传统计、报告上传与排行榜、调试包上传、向作者服务器提交路由跳点 IP 的 ASN 查询、rootfs / NixOS 环境

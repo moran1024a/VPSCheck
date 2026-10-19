@@ -79,12 +79,12 @@ UA_BROWSER="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 setup_colors() {
   if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ] && [ -z "${NO_COLOR:-}" ]; then
     C_R=$'\033[31m'; C_G=$'\033[32m'; C_Y=$'\033[33m'; C_B=$'\033[34m'
-    C_M=$'\033[35m'; C_W=$'\033[97m'; C_D=$'\033[2m'
-    C_BOLD=$'\033[1m'; C_0=$'\033[0m'
+    C_M=$'\033[35m'; C_C=$'\033[36m'; C_W=$'\033[97m'; C_D=$'\033[2m'
+    C_BOLD=$'\033[1m'; C_I=$'\033[3m'; C_0=$'\033[0m'
     BG_R=$'\033[41m'; BG_G=$'\033[42m'; BG_Y=$'\033[43m'; BG_B=$'\033[44m'
   else
-    C_R=""; C_G=""; C_Y=""; C_B=""; C_M=""; C_W=""; C_D=""
-    C_BOLD=""; C_0=""; BG_R=""; BG_G=""; BG_Y=""; BG_B=""
+    C_R=""; C_G=""; C_Y=""; C_B=""; C_M=""; C_C=""; C_W=""; C_D=""
+    C_BOLD=""; C_I=""; C_0=""; BG_R=""; BG_G=""; BG_Y=""; BG_B=""
   fi
 }
 
@@ -145,16 +145,21 @@ ui_section() {
   printf '\n%s%s== %s %s%s\n' "$C_BOLD" "$C_W" "$title" "$(ui_repeat '=' "$fill")" "$C_0"
 }
 
-# 二级标题：> 基础信息
+# 二级标题：> 基础信息（青色）。UI_SUB_GAP=0 时前面不空行（IP 质量部分同原版紧凑排列）
+UI_SUB_GAP=1
 ui_sub() {
-  printf '\n%s%s> %s%s\n' "$C_BOLD" "$C_W" "${1//·/-}" "$C_0"
+  [ "$UI_SUB_GAP" -eq 1 ] && printf '\n'
+  printf '%s%s> %s%s\n' "$C_BOLD" "$C_C" "${1//·/-}" "$C_0"
 }
 
-# 键值行：  键（白色，定宽）  值
+# 键值行：  键（青色，定宽）  值
 UI_KEY_W=14
 ui_kv() {
-  printf '  %s%s%s%s\n' "$C_W" "$(ui_pad "$1" "$UI_KEY_W")" "$C_0" "$2"
+  printf '  %s%s%s%s\n' "$C_C" "$(ui_pad "$1" "$UI_KEY_W")" "$C_0" "$2"
 }
+
+# 无数据：绿色「无」（同 IPQuality 原版）
+ui_na() { printf '%s%s无%s' "$C_G" "$C_BOLD" "$C_0"; }
 
 ui_clear() { [ -t 2 ] && printf '\033[H\033[2J' >&2; return 0; }
 ui_warn() { printf '  %s[!] %s%s\n' "$C_Y" "$1" "$C_0"; }
@@ -503,9 +508,9 @@ net_wrap() {
 
 # net_kv 键 值 [颜色] [来源]：值超宽时折行续排；值为空显示暗色 "-"；来源以暗色后缀标注
 net_kv() {
-  local key="$1" text="$2" color="${3:-}" src="${4:-}" vw tag="" line
+  local key="$1" text="$2" color="${3:-$C_G}" src="${4:-}" vw tag="" line
   local -a lines
-  if [ -z "$text" ]; then ui_kv "$key" "${C_D}-${C_0}"; return; fi
+  if [ -z "$text" ]; then ui_kv "$key" "$(ui_na)"; return; fi
   vw=$(( UI_W - UI_KEY_W - 2 ))
   [ -n "$src" ] && tag="($src)" && text+=" $tag"
   mapfile -t lines < <(net_wrap "$text" "$vw")
@@ -964,9 +969,9 @@ net_show_conn() {
     if [ -n "${NET_B[tf]:-}" ]; then
       up="${C_G}Transit-Free${C_0}"
     else
-      up="${NET_B[up]:-${C_D}-${C_0}}"
+      up="$C_G${NET_B[up]:-无}$C_0"
     fi
-    v="上游 $up / 对等 ${NET_B[peer]:-${C_D}-${C_0}} / 下游 ${NET_B[down]:-${C_D}-${C_0}}"
+    v="${C_G}上游 $up$C_G / 对等 ${NET_B[peer]:-无} / 下游 ${NET_B[down]:-无}$C_0"
     [ -n "$src" ] && v+=" ${C_D}($src)${C_0}"
     ui_kv "邻居数量" "$v"
   else
@@ -988,14 +993,14 @@ net_show_conn() {
   if [ -n "${NET_B[ix]:-}" ]; then
     net_kv "IX 数量" "${NET_B[ix]}" "" "${NET_S[ix]:-}"
   elif [ -n "${NET_B[pdb_none]:-}" ]; then
-    ui_kv "IX 数量" "${C_D}-${C_0}"
+    ui_kv "IX 数量" "$(ui_na)"
   else
     net_kv "IX 数量" ""
   fi
   if [ -n "${NET_B[fac]:-}" ]; then
     net_kv "机房数量" "${NET_B[fac]}"
   elif [ -n "${NET_B[pdb_none]:-}" ]; then
-    ui_kv "机房数量" "${C_D}-${C_0}"
+    ui_kv "机房数量" "$(ui_na)"
   else
     net_kv "机房数量" ""
   fi
@@ -1211,7 +1216,6 @@ IP_DISNEY_AUTH='ZGlzbmV5JmJyb3dzZXImMS4wLjA.Cu56AgSfBTDag5NiRA81oLHkDZfu5L3CKadn
 
 # ==================== 通用 ====================
 
-ip_dash() { printf '%s-%s' "$C_D" "$C_0"; }
 
 # 超长文本按显示宽度截断
 ip_fit() {
@@ -1347,7 +1351,7 @@ ip_type_tag() {
     library)      txt=图书馆 ;;
     reserved)     txt=保留 ;;
     other)        txt=其他 ;;
-    *) ip_dash; return ;;
+    *) ui_na; return ;;
   esac
   printf '%s%s%s %s %s' "$bg" "$C_W" "$C_BOLD" "$txt" "$C_0"
 }
@@ -1365,7 +1369,7 @@ ip_risk_tag() {
     risky)      c="$C_R"; txt=存在风险 ;;
     highrisk)   c="$C_R"; txt=高风险 ;;
     dos)        c="$C_R"; txt=建议封禁 ;;
-    *) ip_dash; return ;;
+    *) ui_na; return ;;
   esac
   printf '%s%s%s%s' "$c" "$C_BOLD" "$txt" "$C_0"
 }
@@ -1466,7 +1470,7 @@ ip_db_ipapi() {
   num="${IP_API[scoretext]%% *}"
   [[ "$num" =~ ^[0-9]*\.?[0-9]+$ ]] || return
   IP_API[score]=$(awk -v n="$num" 'BEGIN { printf "%.2f%%", n * 100 }')
-  IP_API[bar]=$(awk -v n="$num" 'BEGIN { printf "%d", n * 10000 }')
+  IP_API[bar]=$(awk -v n="$num" 'BEGIN { printf "%d", n * 10000 + 1e-6 }')
   case "${IP_API[scoretext],,}" in
     *"(very low)"*)  IP_API[risk]=verylow ;;
     *"(low)"*)       IP_API[risk]=low ;;
@@ -1853,19 +1857,29 @@ ip_check_mail() {
   done
 }
 
+# ip_dnsbl_query 并发数 反转IP < 库列表：每行输出「结果 库名」，结果 C 正常 / M 已标记 / B 黑名单 / T 超时
+ip_dnsbl_query() {
+  xargs -P "$1" -I {} bash -c '
+    r=$(dig +short "$1.$2" A 2>/dev/null)
+    if [[ "$r" == *";;"* ]]; then echo "T $2"
+    elif [ -z "$r" ] || [[ "$r" =~ ^127\.255\.255\. ]]; then echo "C $2"
+    elif [ "$r" = 127.0.0.2 ]; then echo "B $2"
+    else echo "M $2"; fi' _ "$2" {}
+}
+
 # 输出：总数 正常 已标记 黑名单 超时（dig 报错不计入已标记）
+# 第一遍 50 并发（同原版）；超时的库多因解析器一时处理不过来或缓存未热，第一遍结束后以 10 并发重查一次
 ip_check_dnsbl() {
-  local list="$WORKDIR/ip_dnsbl.list" rev
+  local list="$WORKDIR/ip_dnsbl.list" res="$WORKDIR/ip_dnsbl.res" rev
   ip_step "正在检测 DNS 黑名单（400+ 个库）"
   [ -s "$list" ] || curl -fsL -m 20 "$(ip_ref_url dnsbl.list)" | tr -d '\r' | grep -v '^[[:space:]]*$' | sort -u >"$list"
   rev=$(awk -F. '{print $4"."$3"."$2"."$1}' <<<"$IP_ADDR")
-  xargs -P 50 -I {} bash -c '
-    r=$(dig +short "$1.$2" A 2>/dev/null)
-    if [[ "$r" == *";;"* ]]; then echo T
-    elif [ -z "$r" ] || [[ "$r" =~ ^127\.255\.255\. ]]; then echo C
-    elif [ "$r" = 127.0.0.2 ]; then echo B
-    else echo M; fi' _ "$rev" {} <"$list" |
-    awk '{ n[$1]++ } END { printf "%d %d %d %d %d\n", NR, n["C"], n["M"], n["B"], n["T"] }'
+  ip_dnsbl_query 50 "$rev" <"$list" >"$res"
+  if grep -q '^T ' "$res"; then
+    { grep -v '^T ' "$res"; awk '$1 == "T" { print $2 }' "$res" | ip_dnsbl_query 10 "$rev"; } >"$res.2"
+    mv "$res.2" "$res"
+  fi
+  awk '{ n[$1]++ } END { printf "%d %d %d %d %d\n", NR, n["C"], n["M"], n["B"], n["T"] }' "$res"
 }
 
 # ==================== 输出 ====================
@@ -1874,7 +1888,7 @@ ip_check_dnsbl() {
 ip_row() {
   local key="$1" kw="$2" line
   shift 2
-  line="  $C_W$(ui_pad "$key" "$kw")$C_0"
+  line="  $C_C$(ui_pad "$key" "$kw")$C_0"
   while [ $# -ge 2 ]; do
     line+=$(ui_pad "$2" "$1" c)
     shift 2
@@ -1906,32 +1920,32 @@ ip_show_basic() {
     return
   fi
 
-  ui_sub "基础信息（$note）"
-  ui_kv "IP 地址" "$IP_ADDR"
+  ui_sub "基础信息（$C_I$note$C_0$C_BOLD$C_C）"
+  ui_kv "IP 地址" "$C_G$IP_ADDR$C_0"
   if [ -n "${b[asn]}" ]; then
-    ui_kv "自治系统" "AS${b[asn]}"
-    ui_kv "组织" "$(ip_fit "${b[org]:--}" 64)"
+    ui_kv "自治系统" "${C_G}AS${b[asn]}$C_0"
+    ui_kv "组织" "$C_G$(ip_fit "${b[org]:--}" 64)$C_0"
   else
     ui_kv "自治系统" "未分配"
   fi
   if [ -n "${b[lat]}" ] && [ -n "${b[lon]}" ]; then
-    ui_kv "坐标" "$(ip_dms "${b[lat]}" "${b[lon]}")"
-    ip_is_int "${b[rad]}" && ui_kv "地图" "$(ip_map_url "${b[lat]}" "${b[lon]}" "${b[rad]}")"
+    ui_kv "坐标" "$C_G$(ip_dms "${b[lat]}" "${b[lon]}")$C_0"
+    ip_is_int "${b[rad]}" && ui_kv "地图" "$C_G$(ip_map_url "${b[lat]}" "${b[lon]}" "${b[rad]}")$C_0"
   fi
   city=""
   for k in sub city post; do
     [ -n "${b[$k]}" ] && city+="${city:+, }${b[$k]}"
   done
-  [ -n "$city" ] && ui_kv "城市" "$(ip_fit "$city" 64)"
+  [ -n "$city" ] && ui_kv "城市" "$C_G$(ip_fit "$city" 64)$C_0"
   if [ -n "${b[countrycode]}" ]; then
     v="[${b[countrycode]}]${b[country]}"
     [ -n "${b[continent]}" ] && v+=", ${b[continent]}"
-    ui_kv "使用地" "$(ip_fit "$v" 64)"
+    ui_kv "使用地" "$C_G$(ip_fit "$v" 64)$C_0"
   elif [ -n "${b[continent]}" ]; then
-    ui_kv "洲际" "${b[continent]}"
+    ui_kv "洲际" "$C_G${b[continent]}$C_0"
   fi
-  [ -n "${b[regcountrycode]}" ] && ui_kv "注册地" "$(ip_fit "[${b[regcountrycode]}]${b[regcountry]}" 64)"
-  [ -n "${b[timezone]}" ] && ui_kv "时区" "${b[timezone]}"
+  [ -n "${b[regcountrycode]}" ] && ui_kv "注册地" "$C_G$(ip_fit "[${b[regcountrycode]}]${b[regcountry]}" 64)$C_0"
+  [ -n "${b[timezone]}" ] && ui_kv "时区" "$C_G${b[timezone]}$C_0"
   if [ -n "${b[countrycode]}" ]; then
     if [ "${b[countrycode]}" = "${b[regcountrycode]}" ]; then
       ui_kv "IP 属性" "$BG_G$C_W$C_BOLD 原生IP $C_0"
@@ -1944,21 +1958,23 @@ ip_show_basic() {
 ip_show_type() {
   local w=12
   ui_sub "IP 类型"
-  ip_row "数据库" "$UI_KEY_W" $w "${C_W}IPinfo$C_0" $w "${C_W}ipregistry$C_0" $w "${C_W}ipapi$C_0" \
-    $w "${C_W}IP2Location$C_0" $w "${C_W}AbuseIPDB$C_0"
+  ip_row "数据库" "$UI_KEY_W" $w "$C_C${C_I}IPinfo$C_0" $w "$C_C${C_I}ipregistry$C_0" $w "$C_C${C_I}ipapi$C_0" \
+    $w "$C_C${C_I}IP2Location$C_0" $w "$C_C${C_I}AbuseIPDB$C_0"
   ip_row "使用类型" "$UI_KEY_W" $w "$(ip_type_tag "${IP_INFO[use]}")" $w "$(ip_type_tag "${IP_REG[use]}")" \
     $w "$(ip_type_tag "${IP_API[use]}")" $w "$(ip_type_tag "${IP_I2L[use]}")" $w "$(ip_type_tag "${IP_ABUSE[use]}")"
   ip_row "公司类型" "$UI_KEY_W" $w "$(ip_type_tag "${IP_INFO[com]}")" $w "$(ip_type_tag "${IP_REG[com]}")" \
-    $w "$(ip_type_tag "${IP_API[com]}")" $w "$(ip_type_tag "${IP_I2L[com]}")" $w "$(ip_dash)"
+    $w "$(ip_type_tag "${IP_API[com]}")" $w "$(ip_type_tag "${IP_I2L[com]}")" $w "$(ui_na)"
 }
 
 # ip_score_row 名称 显示文本 分值 低/中分界 中/高分界 满分 风险
-# 刻度 48 列：绿 / 黄 / 红各 16 列。同原版，彩色只铺到分值所在位置（含末端的「|」），
-# 分值落在分界点时进入下一段，如 AbuseIPDB 25 分已到红段
+# 刻度 48 列：绿 / 黄 / 红各 16 列。同原版：彩色只铺到分值所在位置（含末端的「|」），
+# 分值落在分界点时进入下一段（如 AbuseIPDB 25 分已到红段）；「分值|」比彩色部分长时，
+# 「|」仍在彩色末端，数字向左伸进键名后的空白；风险文字紧跟在彩条后面
 ip_score_row() {
-  local name="$1" text="$2" v="$3" p3="$4" p4="$5" p5="$6" risk="$7" fill mark bar n g y r
+  local name="$1" text="$2" v="$3" p3="$4" p4="$5" p5="$6" risk="$7"
+  local fill mark over room g y r left col
   if ! ip_is_int "$v"; then
-    ui_kv "$name" "$(ip_dash)"
+    ui_kv "$name" "$(ui_na)"
     return
   fi
   if [ "$v" -ge "$p4" ]; then fill=$(( 33 + 15 * (v - p4) / (p5 - p4) ))
@@ -1967,18 +1983,21 @@ ip_score_row() {
   fi
   [ "$fill" -gt 48 ] && fill=48
   mark="$text|"
-  n=$(( fill > ${#mark} ? fill : ${#mark} ))
-  printf -v bar '%*s' "$n" "$mark"
+  over=$(( ${#mark} > fill ? ${#mark} - fill : 0 ))
+  room=$(( UI_KEY_W - $(ui_width "$name") - 1 ))
+  [ "$over" -gt "$room" ] && { mark="${mark:over-room}"; over=$room; }
+  printf -v col '%*s' "$fill" "${mark:over}"
+  left="${mark:0:over}"
   g=$(( fill < 16 ? fill : 16 ))
   y=$(( fill > 16 ? (fill < 32 ? fill - 16 : 16) : 0 ))
   r=$(( fill > 32 ? fill - 32 : 0 ))
-  bar="$C_W$C_BOLD$BG_G${bar:0:g}$BG_Y${bar:g:y}$BG_R${bar:g+y:r}$C_0$C_W$C_BOLD${bar:fill}$C_0"
-  ui_kv "$name" "$bar$(printf '%*s' $(( 49 - n )) '')$(ip_risk_tag "$risk")"
+  printf '  %s%s%s%*s%s%s%s%s%s%s%s%s%s%s\n' "$C_C" "$name" "$C_0" $(( UI_KEY_W - $(ui_width "$name") - over )) '' \
+    "$C_W$C_BOLD" "$left" "$BG_G" "${col:0:g}" "$BG_Y" "${col:g:y}" "$BG_R" "${col:g+y:r}" "$C_0" "$(ip_risk_tag "$risk")"
 }
 
 ip_show_score() {
   ui_sub "风险评分"
-  ui_kv "风险等级" "$C_W$BG_G极低         低 $BG_Y$(ui_pad 中等 16 c)$BG_R 高         极高$C_0"
+  ui_kv "风险等级" "$C_I$C_W$BG_G极低         低 $BG_Y$(ui_pad 中等 16 c)$BG_R 高         极高$C_0"
   ip_score_row IP2Location "${IP_I2L[score]}" "${IP_I2L[score]}" 33 66 99 "${IP_I2L[risk]}"
   ip_score_row Scamalytics "${IP_SCAM[score]}" "${IP_SCAM[score]}" 20 60 100 "${IP_SCAM[risk]}"
   ip_score_row ipapi "${IP_API[score]}" "${IP_API[bar]}" 85 300 10000 "${IP_API[risk]}"
@@ -1992,7 +2011,7 @@ ip_factor_cell() {
     true)  printf '%s%s是%s' "$C_R" "$C_BOLD" "$C_0" ;;
     false) printf '%s%s否%s' "$C_G" "$C_BOLD" "$C_0" ;;
     *)
-      if [[ "$1" =~ ^[A-Za-z]{2}$ ]]; then printf '%s[%s]%s' "$C_G" "$1" "$C_0"; else ip_dash; fi ;;
+      if [[ "$1" =~ ^[A-Za-z]{2}$ ]]; then printf '%s[%s]%s' "$C_G" "$1" "$C_0"; else ui_na; fi ;;
   esac
 }
 
@@ -2006,7 +2025,7 @@ ip_show_factor() {
   cols=()
   for i in "${!names[@]}"; do
     w=$(( ${#names[i]} > 4 ? ${#names[i]} + 1 : 5 ))
-    cols+=("$w" "$C_W${names[i]}$C_0")
+    cols+=("$w" "$C_C$C_I${names[i]}$C_0")
   done
   ip_row "库" 8 "${cols[@]}"
   for j in "${!keys[@]}"; do
@@ -2035,13 +2054,13 @@ ip_media_tag() {
     app)     txt=仅APP ;;
     idc)     txt=机房 ;;
     dns)     txt=DNS ;;
-    *) ip_dash; return ;;
+    *) ui_na; return ;;
   esac
   printf '%s%s %s %s' "$bg" "$C_W" "$txt" "$C_0"
 }
 
 ip_show_media() {
-  local -a names=(TikTok Disney+ Netflix YouTube "Prime Video" Reddit ChatGPT)
+  local -a names=(TikTok Disney+ Netflix Youtube AmazonPV Reddit ChatGPT)
   local -a svcs=(tiktok disney netflix youtube prime reddit chatgpt)
   local -a head=() st=() rg=() ty=()
   local i w r c
@@ -2051,9 +2070,9 @@ ip_show_media() {
     r="${IP_MEDIA[${svcs[i]}.r]}"
     c="$C_G"
     [ "$r" = CN ] && c="$C_R"
-    head+=("$w" "$C_W${names[i]}$C_0")
+    head+=("$w" "$C_C$C_I${names[i]}$C_0")
     st+=("$w" "$(ip_media_tag "${IP_MEDIA[${svcs[i]}.s]}")")
-    if [ -n "$r" ]; then rg+=("$w" "$c[$r]$C_0"); else rg+=("$w" "$(ip_dash)"); fi
+    if [ -n "$r" ]; then rg+=("$w" "$c[$r]$C_0"); else rg+=("$w" "$(ui_na)"); fi
     ty+=("$w" "$(ip_media_tag "${IP_MEDIA[${svcs[i]}.t]}")")
   done
   ip_row "服务" 8 "${head[@]}"
@@ -2064,7 +2083,7 @@ ip_show_media() {
 
 ip_show_mail() {
   local svc line="" n=0 key="邮局通信" v
-  ui_sub "邮局连通性"
+  ui_sub "邮局连通性及黑名单检测"
   deps_ok dig nc || return
   ip_check_mail
   ui_prog_clear
@@ -2078,28 +2097,29 @@ ip_show_mail() {
     ui_kv "$key" "${C_R}远端 25 端口不可达$C_0"
     return
   fi
+  # 每行 6 家，每格 9 列（符号 + 最长 7 字符的名称 + 空格）
   for svc in "${IP_MAIL_SVCS[@]}"; do
     if [ "${IP_MAIL[$svc]}" = 1 ]; then
-      line+="+$BG_G$C_W$C_BOLD$svc$C_0 "
+      line+="$C_D+$C_0$BG_G$C_W$C_BOLD$svc$C_0"
     else
-      line+="-$BG_R$C_W$C_BOLD$svc$C_0 "
+      line+="$C_D-$C_0$BG_R$C_W$C_BOLD$svc$C_0"
     fi
+    line+=$(printf '%*s' $(( 8 - ${#svc} )) '')
     n=$((n + 1))
     if [ $((n % 6)) -eq 0 ]; then
-      ui_kv "$key" "${line% }"
+      ui_kv "$key" "${line%"${line##*[! ]}"}"
       line=""
       key=""
     fi
   done
-  [ -n "$line" ] && ui_kv "$key" "${line% }"
+  [ -n "$line" ] && ui_kv "$key" "${line%"${line##*[! ]}"}"
 }
 
 ip_show_dnsbl() {
   local -a r
   local v
-  # 只查 IPv4（同原版）
+  # 只查 IPv4（同原版），与邮局同属一节
   [ "$IP_FAM" = 4 ] || return
-  ui_sub "DNS 黑名单"
   deps_ok dig || return
   read -r -a r <<<"$(ip_check_dnsbl)"
   ui_prog_clear
@@ -2107,12 +2127,13 @@ ip_show_dnsbl() {
     ui_warn "黑名单列表下载失败"
     return
   fi
-  v="${C_W}有效 ${C_BOLD}${r[0]}$C_0   ${C_G}正常 ${C_BOLD}${r[1]}$C_0   ${C_Y}已标记 ${C_BOLD}${r[2]}$C_0   ${C_R}黑名单 ${C_BOLD}${r[3]}$C_0"
+  v="${C_C}有效 ${C_BOLD}${r[0]}$C_0   ${C_G}正常 ${C_BOLD}${r[1]}$C_0   ${C_Y}已标记 ${C_BOLD}${r[2]}$C_0   ${C_R}黑名单 ${C_BOLD}${r[3]}$C_0"
   [ "${r[4]:-0}" -gt 0 ] && v+="   ${C_D}超时 ${r[4]}$C_0"
   ui_kv "黑名单库" "$v"
 }
 
 ip_run() {
+  local UI_SUB_GAP=0
   IP_FAM="$1"
   if [ "$IP_FAM" = 6 ]; then IP_ADDR="$PUB6"; else IP_ADDR="$PUB4"; fi
   ui_section "IP 质量 · IPv$IP_FAM"
@@ -3616,14 +3637,14 @@ tcp_show_carrier() {
   ui_sub "$title"
   tcp_summary "" "$zero_word" "$z" "$y" "$h"
   [ "$fw" -eq 1 ] && printf '  %s由于服务商防火墙限制，延迟和丢包无法探测%s\n' "$C_R" "$C_0"
-  row="  ${C_BOLD}${C_W}$(ui_pad "省份" 6)${C_0}  "
+  row="  ${C_BOLD}${C_C}$(ui_pad "省份" 6)${C_0}  "
   for isp in 电信 联通 移动; do
     [ "$isp" != "电信" ] && row+=" / "
-    row+="${C_W}$(ui_pad "$isp" 10) $(ui_pad "延迟" 5 r) $(ui_pad "丢包" 4 r)${C_0}"
+    row+="${C_C}$(ui_pad "$isp" 10) $(ui_pad "延迟" 5 r) $(ui_pad "丢包" 4 r)${C_0}"
   done
   printf '%s\n' "$row"
   for prov in "${order[@]}"; do
-    row="  ${C_W}$(ui_pad "$prov" 6)${C_0}  "
+    row="  ${C_C}$(ui_pad "$prov" 6)${C_0}  "
     for isp in 电信 联通 移动; do
       [ "$isp" != "电信" ] && row+=" / "
       row+="${cells["$prov|$isp"]:-$(tcp_cell "-" "-" D "-" D 10 5 4)}"
@@ -3656,15 +3677,15 @@ tcp_show_edu() {
   for col in "${cols[@]}"; do
     tcp_summary "$(ui_pad "$col" 13)" "零丢包" ${sums[$col]}
   done
-  row="  ${C_BOLD}${C_W}$(ui_pad "省份" 6)${C_0}  "
+  row="  ${C_BOLD}${C_C}$(ui_pad "省份" 6)${C_0}  "
   for col in "${cols[@]}"; do
     [ "$n" -gt 0 ] && row+=" / "
-    row+="${C_W}$(ui_pad "$col" 18) $(ui_pad "延迟" 6 r) $(ui_pad "丢包" 6 r)${C_0}"
+    row+="${C_C}$(ui_pad "$col" 18) $(ui_pad "延迟" 6 r) $(ui_pad "丢包" 6 r)${C_0}"
     n=$((n + 1))
   done
   printf '%s\n' "$row"
   for prov in "${order[@]}"; do
-    row="  ${C_W}$(ui_pad "$prov" 6)${C_0}  "
+    row="  ${C_C}$(ui_pad "$prov" 6)${C_0}  "
     n=0
     for col in "${cols[@]}"; do
       [ "$n" -gt 0 ] && row+=" / "
