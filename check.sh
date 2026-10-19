@@ -163,19 +163,55 @@ ui_note() { printf '  %s%s%s\n' "$C_D" "$1" "$C_0"; }
 ui_warn() { printf '  %s[!] %s%s\n' "$C_Y" "$1" "$C_0"; }
 ui_err()  { printf '  %s[x] %s%s\n' "$C_R" "$1" "$C_0"; }
 
-# 进度提示（stderr，单行覆盖）
+# 进度提示（stderr，仅终端）：ui_prog 文本 [已完成 总数]
+# 状态写入 $WORKDIR/.prog，由后台进程每 0.2 秒重绘「旋转符号 + 进度条 + 文本」，
+# 看得出脚本仍在运行。输出报告前必须 ui_prog_clear，结束后台进程，避免与报告抢同一行。
+UI_MAIN_PID=$$
+
+ui_spin_loop() {
+  local file="$1" i=0 t chars='|/-\'
+  while kill -0 "$UI_MAIN_PID" 2>/dev/null && [ -f "$file" ]; do
+    t=$(<"$file")
+    printf '\r\033[K  %s%s %s%s' "$C_C" "${chars:i++%4:1}" "$t" "$C_0" >&2
+    sleep 0.2
+  done
+}
+
 ui_prog() {
   [ -t 2 ] || return 0
-  printf '\r\033[K  %s... %s%s' "$C_D" "$1" "$C_0" >&2
+  local t="$1" pid
+  [ -n "${3:-}" ] && t="$(ui_bar "$2" "$3" 20)  $C_D$t"
+  if [ -z "$WORKDIR" ] || [ ! -d "$WORKDIR" ]; then
+    printf '\r\033[K  %s... %s%s' "$C_D" "$t" "$C_0" >&2
+    return 0
+  fi
+  printf '%s' "$t" > "$WORKDIR/.prog"
+  pid=$(cat "$WORKDIR/.prog.pid" 2>/dev/null)
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    # 只往 stderr 画；断开 stdin/stdout，否则在 $(...) 里启动时会占住管道，外层一直等不到结束
+    ui_spin_loop "$WORKDIR/.prog" </dev/null >/dev/null &
+    echo $! > "$WORKDIR/.prog.pid"
+  fi
 }
+
 ui_prog_clear() {
   [ -t 2 ] || return 0
+  local pid
+  if [ -n "$WORKDIR" ] && [ -f "$WORKDIR/.prog.pid" ]; then
+    pid=$(cat "$WORKDIR/.prog.pid" 2>/dev/null)
+    rm -f "$WORKDIR/.prog.pid"
+    if [ -n "$pid" ]; then
+      kill "$pid" 2>/dev/null
+      # 后台进程可能不是当前 shell 的子进程，wait 不到时轮询等它退出
+      wait "$pid" 2>/dev/null || while kill -0 "$pid" 2>/dev/null; do sleep 0.05; done
+    fi
+  fi
   printf '\r\033[K' >&2
 }
 
-# 进度条文本：ui_bar 已完成 总数
+# 进度条文本：ui_bar 已完成 总数 [宽度]
 ui_bar() {
-  local done="$1" total="$2" width=30 fill
+  local done="$1" total="$2" width="${3:-30}" fill
   [ "$total" -gt 0 ] 2>/dev/null || total=1
   [ "$done" -gt "$total" ] && done="$total"
   fill=$(( done * width / total ))
@@ -284,7 +320,7 @@ install_nexttrace_tiny() {
   digest=${meta%%|*}
   url=${meta#*|}
   [ -n "$digest" ] && [ -n "$url" ] || return 1
-  tmp=$(mktemp) || return 1
+  tmp=$(mktemp "${WORKDIR:-/tmp}/nexttrace.XXXXXX") || return 1
   if curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$tmp" &&
      [ "$(sha256sum "$tmp" | awk '{print $1}')" = "$digest" ] &&
      chmod 0755 "$tmp" && "$tmp" -V >/dev/null 2>&1; then
@@ -1156,6 +1192,8 @@ declare -gA IP_MM=() IP_INFO=() IP_SCAM=() IP_REG=() IP_API=() IP_ABUSE=() IP_I2
 declare -gA IP_MEDIA=() IP_MAIL=()
 IP_ADDR=""
 IP_FAM=""
+IP_STEP=0
+IP_STEPS=0
 IP_RAW=""
 IP_COOKIE=""
 IP_MAIL_SVCS=(Gmail Outlook Yahoo Apple QQ MailRU AOL GMX MailCOM 163 Sohu Sina)
@@ -1521,11 +1559,17 @@ ip_db_ipqs() {
   fi
 }
 
+# 整体进度：10 个数据库 + 7 项解锁 + 邮局 + 黑名单（仅 IPv4）
+ip_step() {
+  IP_STEP=$((IP_STEP + 1))
+  ui_prog "IPv$IP_FAM $1" "$IP_STEP" "$IP_STEPS"
+}
+
 ip_query_dbs() {
   local item
   for item in Maxmind:maxmind IPinfo:ipinfo Scamalytics:scamalytics ipregistry:ipregistry ipapi:ipapi \
               AbuseIPDB:abuseipdb IP2Location:ip2location DB-IP:dbip ipdata:ipdata IPQS:ipqs; do
-    ui_prog "IPv$IP_FAM 正在查询 IP 数据库：${item%%:*}"
+    ip_step "正在查询 IP 数据库：${item%%:*}"
     "ip_db_${item#*:}"
   done
 }
@@ -1768,7 +1812,7 @@ ip_query_media() {
   local item
   IP_MEDIA=()
   for item in TikTok:tiktok Disney+:disney Netflix:netflix YouTube:youtube "Prime Video:prime" Reddit:reddit ChatGPT:chatgpt; do
-    ui_prog "IPv$IP_FAM 正在检测解锁：${item%%:*}"
+    ip_step "正在检测解锁：${item%%:*}"
     "ip_media_${item#*:}"
   done
 }
@@ -1779,7 +1823,7 @@ ip_check_mail() {
   local f="$IP_FAM" out="$WORKDIR/ip_mail_$IP_FAM" svc resp
   local -a src=() pids=()
   IP_MAIL=()
-  ui_prog "IPv$f 正在检测邮局连通性"
+  ip_step "正在检测邮局连通性"
   # 只看本地端口为 25 的连接，避免把刚结束的出站 25 连接（TIME-WAIT）误判为占用
   if command -v ss >/dev/null 2>&1 && ss -tan 'sport = :25' 2>/dev/null | tail -n +2 | grep -q .; then
     IP_MAIL[local]=occupied
@@ -1809,7 +1853,7 @@ ip_check_mail() {
 # 输出：总数 正常 已标记 黑名单 超时（dig 报错不计入已标记）
 ip_check_dnsbl() {
   local list="$WORKDIR/ip_dnsbl.list" rev
-  ui_prog "IPv4 正在检测 DNS 黑名单"
+  ip_step "正在检测 DNS 黑名单（400+ 个库）"
   [ -s "$list" ] || curl -sL -m 20 "$(ip_ref_url dnsbl.list)" | tr -d '\r' | grep -v '^[[:space:]]*$' | sort -u >"$list"
   rev=$(awk -F. '{print $4"."$3"."$2"."$1}' <<<"$IP_ADDR")
   xargs -P 50 -I {} bash -c '
@@ -2076,6 +2120,9 @@ ip_run() {
   fi
   deps_ok curl jq || return
 
+  IP_STEP=0
+  IP_STEPS=18
+  [ "$IP_FAM" = 4 ] && IP_STEPS=19
   ip_query_dbs
   ui_prog_clear
   ip_show_basic
@@ -3098,14 +3145,27 @@ tcp_trace_one() {
 }
 
 # 并行追踪一组节点，查询 ASN 后输出线路标签：OK|省份|运营商|协议|域名|标签
+# nexttrace-tiny 单进程约 21MB（traceroute 约 1.5MB），按当前可用内存单独限制并行：
+# 预留 96MB，每个任务按 32MB 计，不超过 TCP_PARALLEL
+tcp_nexttrace_parallel() {
+  local avail p
+  avail=$(awk '/^MemAvailable:/ {print int($2 / 1024); exit}' /proc/meminfo 2>/dev/null)
+  [[ "$avail" =~ ^[0-9]+$ ]] || { echo 1; return; }
+  p=$(( (avail - 96) / 32 ))
+  [ "$p" -lt 1 ] && p=1
+  [ "$p" -gt "$TCP_PARALLEL" ] && p=$TCP_PARALLEL
+  echo "$p"
+}
+
 tcp_collect_routes() {
   local group="$1" family="$2" out_file="$3" prefix="$4" packet_length="${5:-44}" protocol="${6:-tcp}"
-  local idx=0 i prov isp host ip port _r status value label tf
+  local idx=0 i prov isp host ip port _r status value label tf limit="$TCP_PARALLEL"
   local raw="$TCP_DIR/${prefix}.raw" ips="$TCP_DIR/${prefix}.ips" cymru="$TCP_DIR/${prefix}.cymru" map="$TCP_DIR/${prefix}.asn"
+  [ "$protocol" = nexttrace ] && limit=$(tcp_nexttrace_parallel)
   : > "$out_file"
   while IFS='|' read -r prov isp host ip port _r; do
     idx=$((idx + 1))
-    while [ "$(jobs -pr | wc -l)" -ge "$TCP_PARALLEL" ]; do sleep 0.2; done
+    while [ "$(jobs -pr | wc -l)" -ge "$limit" ]; do sleep 0.2; done
     tcp_trace_one "$family" "$protocol" "$prov" "$isp" "$host" "$idx" "${port:-80}" "$ip" "$prefix" "$packet_length" &
   done < <(tcp_selected "$group")
   wait
