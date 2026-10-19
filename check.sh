@@ -221,7 +221,6 @@ fmt_duration() {
 
 # 各项检测所需命令；_OPT 为可选依赖，缺失时只跳过对应小项
 DEPS_NET=(curl jq)
-DEPS_NET_OPT=(stunclient)
 DEPS_IP=(curl jq dig nslookup nc timeout)
 DEPS_TCP=(curl nping traceroute timeout)
 DEPS_LARGE_OPT=(nexttrace-tiny)
@@ -299,7 +298,7 @@ install_nexttrace_tiny() {
 missing_commands() {
   local -a need=() out=()
   local c
-  [ "$DO_NET" -eq 1 ] && need+=("${DEPS_NET[@]}" "${DEPS_NET_OPT[@]}")
+  [ "$DO_NET" -eq 1 ] && need+=("${DEPS_NET[@]}")
   [ "$DO_IP" -eq 1 ] && need+=("${DEPS_IP[@]}")
   if [ "$IS_ROOT" -eq 1 ] && [ $((TCP_ROUTE + TCP_LARGE + TCP_EDU)) -gt 0 ]; then
     need+=("${DEPS_TCP[@]}")
@@ -392,6 +391,15 @@ declare -A NET_B=()    # BGP 字段
 declare -A NET_S=()    # 字段来源（非 RIPEstat 时记录）
 declare -A NET_W=()    # whois 解析结果
 declare -A NET_NAT=()  # stunclient 解析结果
+NET_STUNCLIENT=""
+NET_STUNCLIENT_ERR=""
+
+# 仓库 bin/ 下的静态编译 stunclient（编译方式见 bin/README.md），按架构写死 sha256
+NET_STUNCLIENT_URL="https://raw.githubusercontent.com/moran1024a/VPSCheck/main/bin"
+declare -A NET_STUNCLIENT_SHA256=(
+  [amd64]=ab8b8d98840217eadb8f2cf02e2ef4f749c8e71bc90f0df6d66d6a2941715cb3
+  [arm64]=2867b077184b269691ba8114332baa400622419cabd623bdcc0a295098cfd10f
+)
 NET_PIDS=()
 
 # ---------- 通用 ----------
@@ -1018,13 +1026,43 @@ net_nat_classify() {
 }
 
 # 依次尝试 STUN 服务器，结果留在 NET_NAT，服务器写入 NET_NAT[server]
+# 优先用系统中的 stunclient；没有则下载到临时目录并校验。
+# 成功时写入 NET_STUNCLIENT，失败时把原因写入 NET_STUNCLIENT_ERR
+net_stunclient_get() {
+  local arch file sum
+  NET_STUNCLIENT_ERR=""
+  NET_STUNCLIENT=$(command -v stunclient 2>/dev/null)
+  [ -n "$NET_STUNCLIENT" ] && return 0
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) NET_STUNCLIENT_ERR="暂无 $(uname -m) 架构的 stunclient"; return 1 ;;
+  esac
+  command -v sha256sum >/dev/null 2>&1 || { NET_STUNCLIENT_ERR="缺少依赖: sha256sum"; return 1; }
+  file="$WORKDIR/stunclient"
+  ui_prog "NAT 类型：下载 stunclient（$arch）"
+  if ! curl -fsSL --connect-timeout 10 --max-time 120 "$NET_STUNCLIENT_URL/stunclient_linux_$arch" -o "$file"; then
+    NET_STUNCLIENT_ERR="stunclient 下载失败"
+  else
+    sum=$(sha256sum "$file" | awk '{print $1}')
+    [ "$sum" = "${NET_STUNCLIENT_SHA256[$arch]}" ] || NET_STUNCLIENT_ERR="stunclient 校验失败（sha256 不符）"
+  fi
+  ui_prog_clear
+  if [ -n "$NET_STUNCLIENT_ERR" ]; then
+    rm -f "$file"
+    return 1
+  fi
+  chmod 0755 "$file"
+  NET_STUNCLIENT="$file"
+}
+
 net_nat_probe() {
   local srv out best="" best_srv="" rank best_rank=0
   local -a to=()
   command -v timeout >/dev/null 2>&1 && to=(timeout 45)
   for srv in "${NET_STUN_SERVERS[@]}"; do
     ui_prog "NAT 类型：stunclient -> $srv"
-    out=$("${to[@]}" stunclient --mode full --family 4 "${srv%:*}" "${srv##*:}" 2>&1)
+    out=$("${to[@]}" "$NET_STUNCLIENT" --mode full --family 4 "${srv%:*}" "${srv##*:}" 2>&1)
     net_nat_parse "$out"
     # 3=行为与过滤测试都成功，2=绑定成功，1=绑定明确失败，0=无结果（域名解析失败等）
     rank=0
@@ -1101,9 +1139,9 @@ net_run() {
     [ "$RUN_V4" -eq 1 ] || { ui_sub "NAT 类型"; ui_note "NAT 检测仅支持 IPv4，本次未检测 IPv4，已跳过"; }
     return 0
   fi
-  if ! command -v stunclient >/dev/null 2>&1; then
+  if ! net_stunclient_get; then
     ui_sub "NAT 类型"
-    ui_warn "缺少依赖: stunclient（stuntman，发行版仓库中没有，需自行编译），已跳过 NAT 检测"
+    ui_warn "${NET_STUNCLIENT_ERR}，已跳过 NAT 检测"
     return 0
   fi
   net_nat_probe

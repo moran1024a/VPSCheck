@@ -8,7 +8,7 @@
 
 脚本只在本机输出结果，**不上传任何检测结果、不做云端留档、不统计运行次数**，也不包含任何测速功能。
 
-> 当前版本 v0.1.0：网络信息与 IP 质量已在真实环境验证；TCP 回程与 NAT 检测尚未在真实 VPS 上完整验证。
+> 当前版本 v0.1.0：网络信息、NAT 与 IP 质量已在真实环境验证；TCP 回程尚未在真实 VPS 上完整验证。
 
 ## 快速开始
 
@@ -88,7 +88,7 @@ bash check.sh -A -o report.txt           # 全部检测并保存报告
 - RIPEstat 某项查询失败或为空时，才用 bgp.tools / bgp.he.net 补该项，报告中会标注兜底来源。RIPEstat 的 whois 对 RIPE / APNIC 地址常常只给组织句柄，所以组织名和地址经常由 he.net 补上；bgp.tools 目前对脚本请求返回人机验证页，遇到时会提示并跳过。
 - 上游 / 对等 / 下游数量由 RIPE RIS 的 AS 路径相邻关系推断：只在左侧出现且路径数达到最强邻居 10% 记为上游，双向出现或仅 RIS 直连可见记为对等，只在右侧出现记为下游；公认 Tier-1 视为 Transit-Free。大型内容网络（如 Cloudflare、Google）的对等常被计为上游，数字仅供参考。
 - NAT 依次尝试 STUN 服务器 `stun.voipgate.com`、`stun.easybell.de`（均支持 RFC 5780 行为测试）。`stunclient` 不测 hairpin，所以不显示该项。
-- `stunclient` 来自 [stuntman](https://github.com/jselbie/stunserver)，主流发行版仓库中已没有该软件包，未安装时跳过 NAT 检测。
+- `stunclient` 来自 [stuntman](https://github.com/jselbie/stunserver)。主流发行版仓库中已没有该软件包，本机没有时自动从本仓库 [`bin/`](bin/) 下载静态编译版本（amd64 / arm64）到临时目录，校验 sha256 后运行，不安装到系统。
 
 ### IP 质量
 
@@ -132,25 +132,32 @@ bash check.sh -A -o report.txt           # 全部检测并保存报告
 
 | 检测项目 | 依赖 |
 |---|---|
-| 网络信息 | curl、jq；NAT 需要 `stunclient`（stuntman，发行版仓库中没有，需自行编译后放入 PATH） |
+| 网络信息 | curl、jq；NAT 检测自动下载 `stunclient`（需要 sha256sum） |
 | IP 质量 | curl、jq、dig、nslookup、nc、timeout |
 | TCP 回程 | curl、nping（nmap）、traceroute、timeout；大包回程线路识别需要 `nexttrace-tiny`（从 [NTrace-core](https://github.com/nxtrace/NTrace-core) 最新 Release 下载，按 Release 记录的 sha256 校验通过后安装到 `/usr/local/bin`） |
 
-可选依赖缺失时只跳过对应小项（如没有 `stunclient` 只跳过 NAT）。安装提示只在终端中出现，直接回车或输入 y 才安装；非交互运行时不安装（除非加 `-y`）。
+可选依赖缺失时只跳过对应小项（如没有 nexttrace-tiny 只是大包回程不识别线路）。安装提示只在终端中出现，直接回车或输入 y 才安装；非交互运行时不安装（除非加 `-y`）。
 
 ## 隐私与外部请求
 
 脚本只做查询，不提交检测结果。运行时会访问：
 
 - 公网 IP 获取：ipify / ip.sb / ifconfig.co / icanhazip.com / ipinfo.io
-- 网络信息：stat.ripe.net（请求带 `sourceapp=vpscheck` 标识）、peeringdb.com、STUN 服务器；兜底时 bgp.tools、bgp.he.net
+- 网络信息：stat.ripe.net（请求带 `sourceapp=vpscheck` 标识）、peeringdb.com、STUN 服务器、本仓库的 raw 地址（下载 stunclient）；兜底时 bgp.tools、bgp.he.net
 - IP 质量：IPQuality 作者的数据代理 `ipinfo.check.place`（Maxmind 与多个风险库经它查询）、ipinfo.io、ipregistry.co、db-ip.com、各流媒体 / AI 平台、各邮局 MX；参考数据（ISO 3166、DNSBL 列表）从 IPQuality 的 GitHub 仓库下载
 - TCP 回程：TcpQuality 作者的节点服务 `tcpquality.ibsgss.uk/getNodes`（失败时使用脚本内置的节点快照）、Team Cymru ASN 查询（whois.cymru.com）、各探测节点
 - 依赖安装：系统包管理器源；nexttrace-tiny 来自 api.github.com 与 github.com
 
 ## 文件结构
 
-单文件脚本 `check.sh`，按区块组织：
+```
+check.sh                                  检测脚本（单文件）
+bin/stunclient_linux_{amd64,arm64}        NAT 检测用的 stunclient 静态二进制
+bin/build-stunclient.sh, bin/README.md    编译脚本与来源说明
+.github/workflows/build-stunclient.yml    编译 stunclient 的工作流（手动触发）
+```
+
+`check.sh` 按区块组织：
 
 ```
 公共层        颜色、排版（80 列，中文宽度自适应）、依赖管理、公网 IP 获取
@@ -205,7 +212,8 @@ ip_run 4
 
 - IP 质量模块与 BGP 兜底解析移植自 xykt/IPQuality、xykt/NetQuality（AGPL-3.0），版权归原作者所有
 - TCP 回程模块移植自 ibsgss/TcpQuality（GPL-3.0-only），版权归原作者所有，依 GPL-3.0 第 13 条与本程序合并分发
-- 运行时下载的第三方程序（nexttrace-tiny 等）不随本项目分发，遵循其各自许可证
+- `bin/` 下的 stunclient 由 [stuntman](https://github.com/jselbie/stunserver) 源码编译，以 Apache-2.0 发布（见 [`bin/LICENSE.stuntman`](bin/LICENSE.stuntman)）
+- 运行时从其他来源下载的程序（nexttrace-tiny）不随本项目分发，遵循其各自许可证
 
 ## 致谢
 
