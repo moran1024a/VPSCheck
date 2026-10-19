@@ -244,6 +244,16 @@ detect_public_ips() {
   [ -n "$PUB6" ] && HAS_V6=1
 }
 
+# run_to 秒数 命令…：带超时运行。--foreground 让命令留在本进程组，Ctrl-C 能一起结束
+# （默认的 timeout 会另起进程组，中断后命令仍在后台运行）。
+# 没有 timeout 或不支持 --foreground（如 BusyBox）时不加超时，依赖命令自身的超时
+RUN_TO_FG=0
+run_to() {
+  local s="$1"
+  shift
+  if [ "$RUN_TO_FG" -eq 1 ]; then timeout --foreground "$s" "$@"; else "$@"; fi
+}
+
 # 秒数格式化为「X 分 Y 秒」
 fmt_duration() {
   local s="$1"
@@ -254,8 +264,8 @@ fmt_duration() {
 
 # 各项检测所需命令；_OPT 为可选依赖，缺失时只跳过对应小项
 DEPS_NET=(curl jq)
-DEPS_IP=(curl jq dig nslookup nc timeout)
-DEPS_TCP=(curl nping traceroute timeout)
+DEPS_IP=(curl jq dig nslookup nc)
+DEPS_TCP=(curl nping traceroute)
 DEPS_LARGE_OPT=(nexttrace-tiny)
 
 pkg_manager() {
@@ -270,7 +280,6 @@ pkg_name() {
   local cmd="$1" pm="$2"
   case "$cmd" in
     curl|jq|traceroute) echo "$cmd" ;;
-    timeout) echo coreutils ;;
     nping)
       case "$pm" in apk) echo nmap-nping ;; *) echo nmap ;; esac ;;
     dig|nslookup)
@@ -293,9 +302,11 @@ pkg_install() {
 }
 
 # nexttrace-tiny 不在发行版仓库里，从 NTrace-core 官方 Release 下载，
-# 校验 Release 中记录的 sha256 并能正常运行后才安装
+# 校验 Release 中记录的 sha256 并能正常运行后才安装；失败原因写入 NT_ERR
+NT_ERR=""
 install_nexttrace_tiny() {
-  local arch name meta url digest tmp
+  local arch name meta url digest tmp rc
+  NT_ERR="下载或校验失败"
   command -v sha256sum >/dev/null 2>&1 || return 1
   case "$(uname -m)" in
     x86_64|amd64) arch=amd64 ;;
@@ -319,9 +330,17 @@ install_nexttrace_tiny() {
   [ -n "$digest" ] && [ -n "$url" ] || return 1
   tmp=$(mktemp "${WORKDIR:-/tmp}/nexttrace.XXXXXX") || return 1
   if curl -fsSL --connect-timeout 15 --max-time 180 "$url" -o "$tmp" &&
-     [ "$(sha256sum "$tmp" | awk '{print $1}')" = "$digest" ] &&
-     chmod 0755 "$tmp" && "$tmp" -V >/dev/null 2>&1; then
-    $SUDO install -m 0755 "$tmp" /usr/local/bin/nexttrace-tiny && rm -f "$tmp" && return 0
+     [ "$(sha256sum "$tmp" | awk '{print $1}')" = "$digest" ] && chmod 0755 "$tmp"; then
+    "$tmp" -V >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      $SUDO install -m 0755 "$tmp" /usr/local/bin/nexttrace-tiny && rm -f "$tmp" && return 0
+      NT_ERR="安装到 /usr/local/bin 失败"
+    elif [ "$rc" -eq 126 ]; then
+      NT_ERR="临时目录不可执行（noexec）"
+    else
+      NT_ERR="无法运行"
+    fi
   fi
   rm -f "$tmp"
   return 1
@@ -344,8 +363,9 @@ missing_commands() {
   echo "${out[*]}"
 }
 
+DEPS_FAILED=0
 ensure_deps() {
-  local missing pm c pkg answer
+  local missing pm c pkg answer inst
   local -a pkgs=() manual=()
   local want_nt=0
   missing=$(missing_commands)
@@ -362,9 +382,14 @@ ensure_deps() {
     fi
   done
 
+  case "$pm" in
+    apk) inst="apk add" ;;
+    pacman) inst="pacman -S" ;;
+    *) inst="$pm install" ;;
+  esac
   echo "${C_Y}缺少依赖：${missing}${C_0}" >&2
-  [ "${#pkgs[@]}" -gt 0 ] && echo "  可通过包管理器安装：$pm install ${pkgs[*]}" >&2
-  [ "$want_nt" -eq 1 ] && echo "  nexttrace-tiny：从 github.com/nxtrace/NTrace-core 下载到 /usr/local/bin（大包回程线路识别用）" >&2
+  [ "${#pkgs[@]}" -gt 0 ] && echo "  安装命令：$inst ${pkgs[*]}" >&2
+  [ "$want_nt" -eq 1 ] && echo "  nexttrace-tiny：从 NTrace-core Release 下载到 /usr/local/bin" >&2
   [ "${#manual[@]}" -gt 0 ] && echo "  系统仓库中没有，需手动安装：${manual[*]}" >&2
 
   if [ "${#pkgs[@]}" -eq 0 ] && [ "$want_nt" -eq 0 ]; then
@@ -378,7 +403,7 @@ ensure_deps() {
   if [ "$OPT_YES" -ne 1 ]; then
     if [ -t 0 ]; then
       # 读不到输入（EOF）按不安装处理，只有回车或 y 才安装
-      if ! read -r -p "是否现在安装？[Y/n] " answer </dev/tty || [[ "$answer" == [nN]* ]]; then
+      if ! read -r -p "是否现在安装？[Y/n] " answer </dev/tty || [[ ! "$answer" =~ ^([yY]([eE][sS])?)?$ ]]; then
         echo "  已跳过安装，缺失项目对应的检测会被跳过。" >&2
         return 0
       fi
@@ -389,11 +414,11 @@ ensure_deps() {
   fi
   if [ "${#pkgs[@]}" -gt 0 ]; then
     echo "  正在安装：${pkgs[*]} ..." >&2
-    pkg_install "$pm" "${pkgs[@]}" || echo "${C_Y}  部分软件包安装失败${C_0}" >&2
+    pkg_install "$pm" "${pkgs[@]}" || { echo "${C_Y}  部分软件包安装失败${C_0}" >&2; DEPS_FAILED=1; }
   fi
   if [ "$want_nt" -eq 1 ]; then
     echo "  正在下载并校验 nexttrace-tiny ..." >&2
-    install_nexttrace_tiny || echo "${C_Y}  nexttrace-tiny 下载或校验失败，大包回程将不做线路识别${C_0}" >&2
+    install_nexttrace_tiny || { echo "${C_Y}  nexttrace-tiny ${NT_ERR}，大包回程将不做线路识别${C_0}" >&2; DEPS_FAILED=1; }
   fi
   hash -r
 }
@@ -714,6 +739,7 @@ net_ripe_stage2() {
       for i in "${!ups[@]}"; do
         a=""
         [ -s "$d/up_$i.json" ] && a=$(jq -r '.data.holder // empty' "$d/up_$i.json")
+        a=${a#"AS${ups[i]} - "}
         NET_B[mainup]+="AS${ups[i]}${a:+ $a}"$'\n'
       done
     fi
@@ -1067,16 +1093,20 @@ net_stunclient_get() {
     return 1
   fi
   chmod 0755 "$file"
+  # --help 正常时以非 0 退出，只有 126（无法执行）说明临时目录挂载了 noexec
+  "$file" --help >/dev/null 2>&1
+  if [ $? -eq 126 ]; then
+    NET_STUNCLIENT_ERR="临时目录不可执行（noexec），无法运行 stunclient"
+    return 1
+  fi
   NET_STUNCLIENT="$file"
 }
 
 net_nat_probe() {
   local srv out best="" best_srv="" rank best_rank=0
-  local -a to=()
-  command -v timeout >/dev/null 2>&1 && to=(timeout 45)
   for srv in "${NET_STUN_SERVERS[@]}"; do
     ui_prog "NAT 类型：stunclient -> $srv"
-    out=$("${to[@]}" "$NET_STUNCLIENT" --mode full --family 4 "${srv%:*}" "${srv##*:}" 2>&1)
+    out=$(run_to 45 "$NET_STUNCLIENT" --mode full --family 4 "${srv%:*}" "${srv##*:}" 2>&1)
     net_nat_parse "$out"
     # 3=行为与过滤测试都成功，2=绑定成功，1=绑定明确失败，0=无结果（域名解析失败等）
     rank=0
@@ -1625,7 +1655,7 @@ ip_media_tiktok() {
 ip_media_disney() {
   local f="$IP_FAM" type pre assertion body token refresh gql preview region supported
   type=$(ip_unlock_type "$(ip_dns_1 disneyplus.com)" "$(ip_dns_3 disneyplus.com)")
-  [ -n "$IP_COOKIE" ] || IP_COOKIE=$(curl -sL --retry 3 -m 10 "$(ip_ref_url cookies.txt)")
+  [ -n "$IP_COOKIE" ] || IP_COOKIE=$(curl -fsL --retry 3 -m 10 "$(ip_ref_url cookies.txt)")
   pre=$(curl "-$f" -A "$UA_BROWSER" -s -m 10 -X POST "https://disney.api.edge.bamgrid.com/devices" \
     -H "authorization: Bearer $IP_DISNEY_AUTH" -H "content-type: application/json; charset=UTF-8" \
     -d '{"deviceFamily":"browser","applicationRuntime":"chrome","deviceProfile":"windows","attributes":{}}' 2>&1)
@@ -1803,7 +1833,7 @@ ip_check_mail() {
   else
     # 绑定源端口 25 需要 root
     [ "$IS_ROOT" -eq 1 ] && src=(-p 25)
-    resp=$(printf 'QUIT\r\n' | timeout 10 nc "-$f" "${src[@]}" -w 9 smtp.mailgun.org 25 2>&1)
+    resp=$(printf 'QUIT\r\n' | run_to 10 nc "-$f" "${src[@]}" -w 9 smtp.mailgun.org 25 2>&1)
     [[ "$resp" == *220* ]] && IP_MAIL[local]=yes || IP_MAIL[local]=no
   fi
   : >"$out"
@@ -1811,7 +1841,7 @@ ip_check_mail() {
     (
       host=$(dig +short MX "${IP_MAIL_DOMAIN[$svc]}" 2>/dev/null | sort -n | head -n 1 | awk '{print $2}')
       [ -n "$host" ] || exit 0
-      resp=$(printf 'QUIT\r\n' | timeout 5 nc "-$f" -w 4 "$host" 25 2>&1)
+      resp=$(printf 'QUIT\r\n' | run_to 5 nc "-$f" -w 4 "$host" 25 2>&1)
       [[ "$resp" == *220* ]] && echo "$svc" >>"$out"
     ) &
     pids+=($!)
@@ -1827,7 +1857,7 @@ ip_check_mail() {
 ip_check_dnsbl() {
   local list="$WORKDIR/ip_dnsbl.list" rev
   ip_step "正在检测 DNS 黑名单（400+ 个库）"
-  [ -s "$list" ] || curl -sL -m 20 "$(ip_ref_url dnsbl.list)" | tr -d '\r' | grep -v '^[[:space:]]*$' | sort -u >"$list"
+  [ -s "$list" ] || curl -fsL -m 20 "$(ip_ref_url dnsbl.list)" | tr -d '\r' | grep -v '^[[:space:]]*$' | sort -u >"$list"
   rev=$(awk -F. '{print $4"."$3"."$2"."$1}' <<<"$IP_ADDR")
   xargs -P 50 -I {} bash -c '
     r=$(dig +short "$1.$2" A 2>/dev/null)
@@ -1923,19 +1953,19 @@ ip_show_type() {
 }
 
 # ip_score_row 名称 显示文本 分值 低/中分界 中/高分界 满分 风险
-# 刻度 48 列：绿 / 黄 / 红各 16 列。同原版，彩色只铺到分值所在位置，分值文字贴在末端
+# 刻度 48 列：绿 / 黄 / 红各 16 列。同原版，彩色只铺到分值所在位置（含末端的「|」），
+# 分值落在分界点时进入下一段，如 AbuseIPDB 25 分已到红段
 ip_score_row() {
   local name="$1" text="$2" v="$3" p3="$4" p4="$5" p5="$6" risk="$7" fill mark bar n g y r
   if ! ip_is_int "$v"; then
     ui_kv "$name" "$(ip_dash)"
     return
   fi
-  if [ "$v" -ge "$p4" ]; then fill=$(( 32 + 16 * (v - p4) / (p5 - p4) ))
-  elif [ "$v" -ge "$p3" ]; then fill=$(( 16 + 16 * (v - p3) / (p4 - p3) ))
-  else fill=$(( 16 * v / p3 ))
+  if [ "$v" -ge "$p4" ]; then fill=$(( 33 + 15 * (v - p4) / (p5 - p4) ))
+  elif [ "$v" -ge "$p3" ]; then fill=$(( 17 + 16 * (v - p3) / (p4 - p3) ))
+  else fill=$(( 1 + 16 * v / p3 ))
   fi
   [ "$fill" -gt 48 ] && fill=48
-  [ "$fill" -lt 0 ] && fill=0
   mark="$text|"
   n=$(( fill > ${#mark} ? fill : ${#mark} ))
   printf -v bar '%*s' "$n" "$mark"
@@ -2035,7 +2065,7 @@ ip_show_media() {
 ip_show_mail() {
   local svc line="" n=0 key="邮局通信" v
   ui_sub "邮局连通性"
-  deps_ok dig nc timeout || return
+  deps_ok dig nc || return
   ip_check_mail
   ui_prog_clear
   case "${IP_MAIL[local]}" in
@@ -2518,11 +2548,7 @@ tcp_cymru_query() {
     sort -u "$ip_file"
     echo "end"
   } > "$req_file"
-  if command -v timeout >/dev/null 2>&1; then
-    timeout 35 bash -c 'exec 3<>/dev/tcp/whois.cymru.com/43; cat "$1" >&3; cat <&3' _ "$req_file" > "$out_file" 2>/dev/null
-  else
-    bash -c 'exec 3<>/dev/tcp/whois.cymru.com/43; cat "$1" >&3; cat <&3' _ "$req_file" > "$out_file" 2>/dev/null
-  fi
+  run_to 35 bash -c 'exec 3<>/dev/tcp/whois.cymru.com/43; cat "$1" >&3; cat <&3' _ "$req_file" > "$out_file" 2>/dev/null
   rm -f "$req_file"
 }
 
@@ -3058,11 +3084,11 @@ tcp_trace_one() {
       return
     fi
     args=(-4 -T -p "$port" --psize "$packet_length" -M -d disable-geoip -n -q 3 -m 30 "$target_ip")
-    output=$(timeout "$TCP_TRACE_TIMEOUT" nexttrace-tiny "${args[@]}" 2>&1)
+    output=$(run_to "$TCP_TRACE_TIMEOUT" nexttrace-tiny "${args[@]}" 2>&1)
     rc=$?
   else
     args=(-n "-${family}" -T -p "$port" -q 3 -w 2 -m 30 "$target_ip" "$packet_length")
-    output=$(timeout "$TCP_TRACE_TIMEOUT" traceroute "${args[@]}" 2>&1)
+    output=$(run_to "$TCP_TRACE_TIMEOUT" traceroute "${args[@]}" 2>&1)
     rc=$?
   fi
   if [ "$rc" -eq 124 ]; then
@@ -3081,7 +3107,7 @@ tcp_trace_one() {
   fi
   # 10099 之后国内段全隐藏时重试一次，补全国内骨干
   if [ "$family" = "4" ] && [ "$protocol" = "tcp" ] && tcp_need_10099_retry "$trace_file"; then
-    retry_output=$(timeout "$TCP_TRACE_TIMEOUT" traceroute "${args[@]}" 2>&1)
+    retry_output=$(run_to "$TCP_TRACE_TIMEOUT" traceroute "${args[@]}" 2>&1)
     {
       printf "\n# retry 10099 hidden domestic segment|%s|%s|%s|%s|%s|%s\n" "$prov" "$isp" "$protocol" "$host" "$idx" "$target_ip"
       printf "target %s\n" "$target_ip"
@@ -4143,6 +4169,7 @@ parse_args() {
 
 show_menu() {
   local tag="" choice n ok
+  local -a picks
   [ "$IS_ROOT" -eq 0 ] && tag="${C_D}(需 root，当前不可用)${C_0}" || tag="${C_D}(需 root)${C_0}"
   local err=""
   while :; do
@@ -4162,9 +4189,10 @@ show_menu() {
       [ -n "$err" ] && echo "${C_Y}${err}${C_0}"
     } >&2
     read -r -p "请选择（可多选，空格分隔，如 2 3 4）: " choice </dev/tty || exit 1
+    read -r -a picks <<<"$choice"
     ok=1
-    [ -z "${choice// /}" ] && ok=0
-    for n in $choice; do
+    [ "${#picks[@]}" -eq 0 ] && ok=0
+    for n in "${picks[@]}"; do
       case "$n" in
         0) exit 0 ;;
         1) DO_NET=1; DO_IP=1; TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1 ;;
@@ -4276,14 +4304,27 @@ cleanup() {
   [ -n "$WORKDIR" ] && rm -rf "$WORKDIR"
 }
 
+# 结束某进程的全部子孙进程（不含自身）
+kill_tree() {
+  local c
+  for c in $(pgrep -P "$1" 2>/dev/null); do
+    kill_tree "$c"
+    kill "$c" 2>/dev/null
+  done
+}
+
 on_interrupt() {
   trap - INT TERM
   ui_prog_clear
   echo "${C_Y}已中断${C_0}" >&2
   cleanup
   trap '' TERM
-  kill 0 2>/dev/null
-  exit 130
+  if [ "$(cut -d' ' -f5 "/proc/$$/stat" 2>/dev/null)" = "$$" ]; then
+    kill 0 2>/dev/null
+  else
+    kill_tree $$
+  fi
+  exit "${1:-130}"
 }
 
 main() {
@@ -4293,7 +4334,9 @@ main() {
 
   WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/vpscheck.XXXXXX") || { echo "无法创建临时目录" >&2; exit 1; }
   trap cleanup EXIT
-  trap on_interrupt INT TERM
+  trap 'on_interrupt 130' INT
+  trap 'on_interrupt 143' TERM
+  timeout --foreground 5 true >/dev/null 2>&1 && RUN_TO_FG=1
 
   command -v curl >/dev/null 2>&1 || { echo "需要 curl，请先安装" >&2; exit 1; }
   ui_prog "正在获取公网 IP"
@@ -4324,7 +4367,11 @@ main() {
   fi
 
   ensure_deps
-  [ "$has_items" -eq 0 ] && ui_clear
+  if [ "$has_items" -eq 0 ]; then
+    # 安装失败的提示留在屏幕上，按回车后再清屏
+    [ "$DEPS_FAILED" -eq 1 ] && read -r -p "按回车继续…" _ </dev/tty
+    ui_clear
+  fi
 
   if [ -n "$OPT_OUTPUT" ]; then
     local raw="$WORKDIR/report.ansi"
@@ -4333,6 +4380,7 @@ main() {
       echo "  报告已保存到 $OPT_OUTPUT"
     else
       echo "${C_R}  报告保存失败：$OPT_OUTPUT${C_0}" >&2
+      exit 1
     fi
   else
     run_checks
