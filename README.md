@@ -24,7 +24,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/che
 bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/check.sh) -A -y
 ```
 
-不带检测项目参数时显示菜单（可多选，如 `2 3 5`），选完后再选测试协议：自动（按检测到的公网地址，双栈即两种都测）/ 仅 IPv4 / 仅 IPv6，已用 `-4` / `-6` 指定时跳过：
+不带检测项目参数时显示菜单（可多选，如 `2 3 5`；每步选完清屏），选完后再选测试协议：自动（按检测到的公网地址，双栈即两种都测）/ 仅 IPv4 / 仅 IPv6，已用 `-4` / `-6` 指定时跳过：
 
 ```
 1. 全部检测   2. 网络信息   3. IP 质量   4. 所有回程
@@ -82,7 +82,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/che
 
 - 先识别线路、再统一发包，避免探测流量干扰路由识别；并行数按内存自动决定。
 - 节点从 TcpQuality 的 getNodes 服务实时获取，失败时用内置快照（2026-10-19，会随节点轮换逐渐过时）。
-- 缺 traceroute / nexttrace-tiny 时仍测延迟与丢包，线路显示「未识别」。超过 10 列的线路标签把 `->` 缩写为 `>`。
+- 缺 traceroute / nexttrace-tiny 时仍测延迟与丢包，线路显示「未识别」；单次路由追踪超过 240 秒（正常最坏约 180 秒）按失败处理，线路显示 `Hidden`。超过 10 列的线路标签把 `->` 缩写为 `>`。
 
 ## 运行要求
 
@@ -127,7 +127,7 @@ bin/                                    stunclient 静态二进制、编译脚�
 - **[ibsgss/TcpQuality](https://github.com/ibsgss/TcpQuality)**（TCP 回程）
   - 只保留三网 / 大包 / 教育网回程，探测与线路识别逻辑不变
   - 删除测速（单线程、Apple CDN、TOS、iPerf3）、国际互联、bpftrace / TCP_INFO 重传统计、报告上传与排行榜、调试包上传、向作者服务器提交路由跳点 IP 的 ASN 查询、rootfs / NixOS 环境
-  - 增加内置节点快照兜底、缺工具时降级运行、nexttrace-tiny 的 sha256 校验
+  - 增加内置节点快照兜底、缺工具时降级运行、路由追踪保险超时、nexttrace-tiny 的 sha256 校验
 - **[xykt/NetQuality](https://github.com/xykt/NetQuality)**（BGP 兜底解析）：仅按字段兜底使用；修正上游数量误计 IRR 表；未移植网段活跃度
 
 以上部分均重新排版为统一的 80 列格式。RIPEstat / PeeringDB 查询、NAT 判定、公共层、菜单与主流程为本项目新写。

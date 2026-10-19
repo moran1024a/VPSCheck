@@ -79,11 +79,11 @@ UA_BROWSER="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 setup_colors() {
   if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ] && [ -z "${NO_COLOR:-}" ]; then
     C_R=$'\033[31m'; C_G=$'\033[32m'; C_Y=$'\033[33m'; C_B=$'\033[34m'
-    C_M=$'\033[35m'; C_C=$'\033[36m'; C_W=$'\033[97m'; C_D=$'\033[2m'
+    C_M=$'\033[35m'; C_W=$'\033[97m'; C_D=$'\033[2m'
     C_BOLD=$'\033[1m'; C_0=$'\033[0m'
     BG_R=$'\033[41m'; BG_G=$'\033[42m'; BG_Y=$'\033[43m'; BG_B=$'\033[44m'
   else
-    C_R=""; C_G=""; C_Y=""; C_B=""; C_M=""; C_C=""; C_W=""; C_D=""
+    C_R=""; C_G=""; C_Y=""; C_B=""; C_M=""; C_W=""; C_D=""
     C_BOLD=""; C_0=""; BG_R=""; BG_G=""; BG_Y=""; BG_B=""
   fi
 }
@@ -142,24 +142,21 @@ ui_section() {
   w=$(ui_width "$title")
   fill=$(( UI_W - w - 4 ))
   [ "$fill" -lt 3 ] && fill=3
-  printf '\n%s%s== %s %s%s\n' "$C_BOLD" "$C_C" "$title" "$(ui_repeat '=' "$fill")" "$C_0"
+  printf '\n%s%s== %s %s%s\n' "$C_BOLD" "$C_W" "$title" "$(ui_repeat '=' "$fill")" "$C_0"
 }
 
-# 二级标题：> 基础信息  数据来源（暗色）
+# 二级标题：> 基础信息
 ui_sub() {
-  local title="${1//·/-}" note="${2:-}"
-  printf '\n%s%s> %s%s' "$C_BOLD" "$C_C" "$title" "$C_0"
-  [ -n "$note" ] && printf '  %s%s%s' "$C_D" "$note" "$C_0"
-  printf '\n'
+  printf '\n%s%s> %s%s\n' "$C_BOLD" "$C_W" "${1//·/-}" "$C_0"
 }
 
-# 键值行：  键（青色，定宽）  值
+# 键值行：  键（白色，定宽）  值
 UI_KEY_W=14
 ui_kv() {
-  printf '  %s%s%s%s\n' "$C_C" "$(ui_pad "$1" "$UI_KEY_W")" "$C_0" "$2"
+  printf '  %s%s%s%s\n' "$C_W" "$(ui_pad "$1" "$UI_KEY_W")" "$C_0" "$2"
 }
 
-ui_note() { printf '  %s%s%s\n' "$C_D" "$1" "$C_0"; }
+ui_clear() { [ -t 2 ] && printf '\033[H\033[2J' >&2; return 0; }
 ui_warn() { printf '  %s[!] %s%s\n' "$C_Y" "$1" "$C_0"; }
 ui_err()  { printf '  %s[x] %s%s\n' "$C_R" "$1" "$C_0"; }
 
@@ -172,7 +169,7 @@ ui_spin_loop() {
   local file="$1" i=0 t chars='|/-\'
   while kill -0 "$UI_MAIN_PID" 2>/dev/null && [ -f "$file" ]; do
     t=$(<"$file")
-    printf '\r\033[K  %s%s %s%s' "$C_C" "${chars:i++%4:1}" "$t" "$C_0" >&2
+    printf '\r\033[K  %s%s %s%s' "$C_W" "${chars:i++%4:1}" "$t" "$C_0" >&2
     sleep 0.2
   done
 }
@@ -406,7 +403,7 @@ deps_ok() {
   local c miss=""
   for c in "$@"; do command -v "$c" >/dev/null 2>&1 || miss+=" $c"; done
   [ -z "$miss" ] && return 0
-  ui_warn "缺少依赖:${miss}，已跳过"
+  ui_warn "缺少依赖:${miss}"
   return 1
 }
 
@@ -764,7 +761,7 @@ net_fb_bgptools() {
     [ -n "$p" ] && net_fetch "$NET_BGPTOOLS/prefix/$p" "$f" 15
   fi
   # 被人机验证页拦截时没有 network-name
-  grep -q 'id="network-name"' "$f" || { NET_B[bt_blocked]=1; return 1; }
+  grep -q 'id="network-name"' "$f" || return 1
   NET_B[bt_ok]=1
 
   p=$(sed -n 's/.*<p id="network-name" class="heading-xlarge">\([^<]*\)<\/p>.*/\1/p' "$f" | head -1)
@@ -898,23 +895,16 @@ net_bgp_collect() {
 # ---------- BGP 展示 ----------
 
 net_show_bgp() {
-  local note="来源: RIPEstat" fb="" v line
-  [[ " ${NET_S[*]} " == *" he.net "* ]] && fb+="he.net"
-  [[ " ${NET_S[*]} " == *" bgp.tools "* ]] && fb+="${fb:+ / }bgp.tools"
-  if [ -n "${NET_B[ripe_down]:-}" ]; then
-    note="来源: ${fb:-无}（RIPEstat 不可用）"
-  elif [ -n "$fb" ]; then
-    note+=", 兜底: $fb"
-  fi
-  ui_sub "BGP 信息" "$note"
+  local v line
+  ui_sub "BGP 信息"
 
   if [ -z "${NET_B[prefix]:-}" ] && [ -z "${NET_B[asn]:-}" ] && [ -z "${NET_B[org]:-}" ]; then
-    ui_warn "未查到该 IP 的 BGP / whois 信息（RIPEstat 与兜底源均无结果）"
+    ui_warn "未查到 BGP 信息"
     return 1
   fi
 
   if [ -n "${NET_B[unannounced]:-}" ]; then
-    net_kv "前缀" "未宣告（RIPEstat: 不在全球路由表中）" "$C_Y"
+    net_kv "前缀" "未宣告" "$C_Y"
   else
     net_kv "前缀" "${NET_B[prefix]:-}" "" "${NET_S[prefix]:-}"
   fi
@@ -940,13 +930,8 @@ net_show_bgp() {
 }
 
 net_show_conn() {
-  local up v src line first=1 note
-  if [ -n "${NET_B[ripe_down]:-}" ]; then
-    note="来源: PeeringDB${NET_S[nb]:+ / ${NET_S[nb]}}（RIPEstat 不可用）"
-  else
-    note="来源: RIPEstat 邻居 / PeeringDB"
-  fi
-  ui_sub "上游与接入" "$note"
+  local up v src line first=1
+  ui_sub "上游与接入"
 
   src="${NET_S[nb]:-}"
   if [ -n "${NET_B[up]:-}${NET_B[peer]:-}" ]; then
@@ -977,24 +962,17 @@ net_show_conn() {
   if [ -n "${NET_B[ix]:-}" ]; then
     net_kv "IX 数量" "${NET_B[ix]}" "" "${NET_S[ix]:-}"
   elif [ -n "${NET_B[pdb_none]:-}" ]; then
-    ui_kv "IX 数量" "${C_D}- (PeeringDB 无该 AS 记录)${C_0}"
+    ui_kv "IX 数量" "${C_D}-${C_0}"
   else
     net_kv "IX 数量" ""
   fi
   if [ -n "${NET_B[fac]:-}" ]; then
     net_kv "机房数量" "${NET_B[fac]}"
   elif [ -n "${NET_B[pdb_none]:-}" ]; then
-    ui_kv "机房数量" "${C_D}- (PeeringDB 无该 AS 记录)${C_0}"
+    ui_kv "机房数量" "${C_D}-${C_0}"
   else
     net_kv "机房数量" ""
   fi
-
-  if [ -z "${NET_S[nb]:-}" ] && [ -n "${NET_B[up]:-}" ]; then
-    ui_note "注: 由 RIPE RIS 的 AS 路径相邻关系推断, 仅供参考。只在左侧出现且路径数达"
-    ui_note "    最强者 10% 记上游, 双向出现或仅 RIS 直连可见记对等, 只在右侧记下游;"
-    ui_note "    大型内容网络的对等常被计为上游, Transit-Free 含公认 Tier-1 名单判断。"
-  fi
-  [ -n "${NET_B[bt_blocked]:-}" ] && ui_note "注: bgp.tools 兜底被其人机验证页拦截, 未取到数据。"
   return 0
 }
 
@@ -1117,17 +1095,14 @@ net_nat_probe() {
 
 net_nat_show() {
   local lp mp
-  ui_sub "NAT 类型" "STUN: ${NET_NAT[server]}"
+  ui_sub "NAT 类型"
   if [ "${NET_NAT[rank]:-0}" -eq 0 ]; then
-    ui_warn "stunclient 无有效输出（STUN 服务器均无法解析或连接），已跳过"
+    ui_warn "STUN 服务器无法连接"
     return
   fi
   net_nat_classify
   net_kv "NAT 类型" "${NET_NAT[type]}" "${NET_NAT[color]}"
-  if [ "${NET_NAT[bind]}" != success ]; then
-    ui_note "STUN 绑定请求无响应：UDP 出站被阻断，或所有 STUN 服务器不可用"
-    return
-  fi
+  [ "${NET_NAT[bind]}" = success ] || return
   case "${NET_NAT[m]}" in
     DIRECT) net_kv "映射行为" "无 NAT（本地地址即公网地址）" ;;
     EIM)    net_kv "映射行为" "端点无关（EIM）" ;;
@@ -1161,7 +1136,7 @@ net_run() {
   [ "$fam" = 6 ] && ip="$PUB6" || ip="$PUB4"
   ui_section "网络信息 · IPv$fam"
   if [ -z "$ip" ]; then
-    ui_warn "未检测到 IPv$fam 公网地址，已跳过"
+    ui_warn "没有 IPv$fam 公网地址"
     return 0
   fi
   deps_ok curl jq || return 0
@@ -1171,13 +1146,11 @@ net_run() {
   net_bgp_collect "$ip" "$d"
   net_show_bgp && net_show_conn
 
-  if [ "$fam" != 4 ]; then
-    [ "$RUN_V4" -eq 1 ] || { ui_sub "NAT 类型"; ui_note "NAT 检测仅支持 IPv4，本次未检测 IPv4，已跳过"; }
-    return 0
-  fi
+  # NAT 只测 IPv4
+  [ "$fam" = 4 ] || return 0
   if ! net_stunclient_get; then
     ui_sub "NAT 类型"
-    ui_warn "${NET_STUNCLIENT_ERR}，已跳过 NAT 检测"
+    ui_warn "$NET_STUNCLIENT_ERR"
     return 0
   fi
   net_nat_probe
@@ -1871,7 +1844,7 @@ ip_check_dnsbl() {
 ip_row() {
   local key="$1" kw="$2" line
   shift 2
-  line="  $C_C$(ui_pad "$key" "$kw")$C_0"
+  line="  $C_W$(ui_pad "$key" "$kw")$C_0"
   while [ $# -ge 2 ]; do
     line+=$(ui_pad "$2" "$1" c)
     shift 2
@@ -1881,14 +1854,13 @@ ip_row() {
 
 ip_show_basic() {
   local -A b=()
-  local k v note="Maxmind 数据库" iso city rad=""
+  local k v note="Maxmind 数据库" iso city
   if [ "${IP_MM[ok]}" = 1 ]; then
     for k in "${!IP_MM[@]}"; do b[$k]="${IP_MM[$k]}"; done
     [ -n "${b[continentcode]}" ] && b[continent]="[${b[continentcode]}]${b[continent]}"
-    rad="${b[rad]}"
   elif [ -n "${IP_INFO[countrycode]}${IP_INFO[asn]}" ]; then
     # Maxmind 不可用时退回 IPinfo（国家名、洲际取自作者仓库的 iso3166.json）
-    note="IPinfo 数据库（Maxmind 查询失败）"
+    note="IPinfo 数据库"
     for k in "${!IP_INFO[@]}"; do b[$k]="${IP_INFO[$k]}"; done
     iso=$(curl -sL -m 10 "$(ip_ref_url iso3166.json)")
     if ip_is_json "$iso"; then
@@ -1898,54 +1870,52 @@ ip_show_basic() {
     fi
     b[rad]=1001
   else
-    ui_sub "基础信息" "Maxmind / IPinfo"
+    ui_sub "基础信息"
     ui_kv "IP 地址" "$IP_ADDR"
     ui_warn "Maxmind 与 IPinfo 均查询失败"
     return
   fi
 
-  ui_sub "基础信息" "$note"
+  ui_sub "基础信息（$note）"
   ui_kv "IP 地址" "$IP_ADDR"
   if [ -n "${b[asn]}" ]; then
-    ui_kv "自治系统" "${C_G}AS${b[asn]}$C_0"
-    ui_kv "组织" "$C_G$(ip_fit "${b[org]:--}" 64)$C_0"
+    ui_kv "自治系统" "AS${b[asn]}"
+    ui_kv "组织" "$(ip_fit "${b[org]:--}" 64)"
   else
     ui_kv "自治系统" "未分配"
   fi
   if [ -n "${b[lat]}" ] && [ -n "${b[lon]}" ]; then
-    v="$C_G$(ip_dms "${b[lat]}" "${b[lon]}")$C_0"
-    [ -n "$rad" ] && v+="  ${C_D}精度半径 ${rad} 公里$C_0"
-    ui_kv "坐标" "$v"
-    ip_is_int "${b[rad]}" && ui_kv "地图" "$C_G$(ip_map_url "${b[lat]}" "${b[lon]}" "${b[rad]}")$C_0"
+    ui_kv "坐标" "$(ip_dms "${b[lat]}" "${b[lon]}")"
+    ip_is_int "${b[rad]}" && ui_kv "地图" "$(ip_map_url "${b[lat]}" "${b[lon]}" "${b[rad]}")"
   fi
   city=""
   for k in sub city post; do
     [ -n "${b[$k]}" ] && city+="${city:+, }${b[$k]}"
   done
-  [ -n "$city" ] && ui_kv "城市" "$C_G$(ip_fit "$city" 64)$C_0"
+  [ -n "$city" ] && ui_kv "城市" "$(ip_fit "$city" 64)"
   if [ -n "${b[countrycode]}" ]; then
     v="[${b[countrycode]}]${b[country]}"
     [ -n "${b[continent]}" ] && v+=", ${b[continent]}"
-    ui_kv "使用地" "$C_G$(ip_fit "$v" 64)$C_0"
+    ui_kv "使用地" "$(ip_fit "$v" 64)"
   elif [ -n "${b[continent]}" ]; then
-    ui_kv "洲际" "$C_G${b[continent]}$C_0"
+    ui_kv "洲际" "${b[continent]}"
   fi
-  [ -n "${b[regcountrycode]}" ] && ui_kv "注册地" "$C_G$(ip_fit "[${b[regcountrycode]}]${b[regcountry]}" 64)$C_0"
-  [ -n "${b[timezone]}" ] && ui_kv "时区" "$C_G${b[timezone]}$C_0"
+  [ -n "${b[regcountrycode]}" ] && ui_kv "注册地" "$(ip_fit "[${b[regcountrycode]}]${b[regcountry]}" 64)"
+  [ -n "${b[timezone]}" ] && ui_kv "时区" "${b[timezone]}"
   if [ -n "${b[countrycode]}" ]; then
     if [ "${b[countrycode]}" = "${b[regcountrycode]}" ]; then
-      ui_kv "IP 属性" "$BG_G$C_W$C_BOLD 原生IP $C_0  ${C_D}使用地与注册地一致$C_0"
+      ui_kv "IP 属性" "$BG_G$C_W$C_BOLD 原生IP $C_0"
     else
-      ui_kv "IP 属性" "$BG_R$C_W$C_BOLD 广播IP $C_0  ${C_D}使用地与注册地不一致$C_0"
+      ui_kv "IP 属性" "$BG_R$C_W$C_BOLD 广播IP $C_0"
     fi
   fi
 }
 
 ip_show_type() {
   local w=12
-  ui_sub "IP 类型" "IPinfo / ipregistry / ipapi / IP2Location / AbuseIPDB"
-  ip_row "数据库" "$UI_KEY_W" $w "${C_C}IPinfo$C_0" $w "${C_C}ipregistry$C_0" $w "${C_C}ipapi$C_0" \
-    $w "${C_C}IP2Location$C_0" $w "${C_C}AbuseIPDB$C_0"
+  ui_sub "IP 类型"
+  ip_row "数据库" "$UI_KEY_W" $w "${C_W}IPinfo$C_0" $w "${C_W}ipregistry$C_0" $w "${C_W}ipapi$C_0" \
+    $w "${C_W}IP2Location$C_0" $w "${C_W}AbuseIPDB$C_0"
   ip_row "使用类型" "$UI_KEY_W" $w "$(ip_type_tag "${IP_INFO[use]}")" $w "$(ip_type_tag "${IP_REG[use]}")" \
     $w "$(ip_type_tag "${IP_API[use]}")" $w "$(ip_type_tag "${IP_I2L[use]}")" $w "$(ip_type_tag "${IP_ABUSE[use]}")"
   ip_row "公司类型" "$UI_KEY_W" $w "$(ip_type_tag "${IP_INFO[com]}")" $w "$(ip_type_tag "${IP_REG[com]}")" \
@@ -1953,26 +1923,31 @@ ip_show_type() {
 }
 
 # ip_score_row 名称 显示文本 分值 低/中分界 中/高分界 满分 风险
-# 刻度条 48 列：绿 / 黄 / 红各 16 列，「|」标出分值所在位置
+# 刻度 48 列：绿 / 黄 / 红各 16 列。同原版，彩色只铺到分值所在位置，分值文字贴在末端
 ip_score_row() {
-  local name="$1" text="$2" v="$3" p3="$4" p4="$5" p5="$6" risk="$7" pos start mark bar
+  local name="$1" text="$2" v="$3" p3="$4" p4="$5" p5="$6" risk="$7" fill mark bar n g y r
   if ! ip_is_int "$v"; then
     ui_kv "$name" "$(ip_dash)"
     return
   fi
-  if [ "$v" -ge "$p4" ]; then pos=$(( 32 + 15 * (v - p4) / (p5 - p4) ))
-  elif [ "$v" -ge "$p3" ]; then pos=$(( 16 + 16 * (v - p3) / (p4 - p3) ))
-  else pos=$(( 16 * v / p3 ))
+  if [ "$v" -ge "$p4" ]; then fill=$(( 32 + 16 * (v - p4) / (p5 - p4) ))
+  elif [ "$v" -ge "$p3" ]; then fill=$(( 16 + 16 * (v - p3) / (p4 - p3) ))
+  else fill=$(( 16 * v / p3 ))
   fi
-  [ "$pos" -gt 47 ] && pos=47
-  if [ "$pos" -ge "${#text}" ]; then mark="$text|"; start=$(( pos - ${#text} )); else mark="|$text"; start=$pos; fi
-  bar=$(printf '%48s' '')
-  bar="${bar:0:start}$mark${bar:start+${#mark}}"
-  ui_kv "$name" "$C_W$C_BOLD$BG_G${bar:0:16}$BG_Y${bar:16:16}$BG_R${bar:32:16}$C_0 $(ip_risk_tag "$risk")"
+  [ "$fill" -gt 48 ] && fill=48
+  [ "$fill" -lt 0 ] && fill=0
+  mark="$text|"
+  n=$(( fill > ${#mark} ? fill : ${#mark} ))
+  printf -v bar '%*s' "$n" "$mark"
+  g=$(( fill < 16 ? fill : 16 ))
+  y=$(( fill > 16 ? (fill < 32 ? fill - 16 : 16) : 0 ))
+  r=$(( fill > 32 ? fill - 32 : 0 ))
+  bar="$C_W$C_BOLD$BG_G${bar:0:g}$BG_Y${bar:g:y}$BG_R${bar:g+y:r}$C_0$C_W$C_BOLD${bar:fill}$C_0"
+  ui_kv "$name" "$bar$(printf '%*s' $(( 49 - n )) '')$(ip_risk_tag "$risk")"
 }
 
 ip_show_score() {
-  ui_sub "风险评分" "IP2Location / Scamalytics / ipapi / AbuseIPDB / IPQS / DB-IP"
+  ui_sub "风险评分"
   ui_kv "风险等级" "$C_W$BG_G极低         低 $BG_Y$(ui_pad 中等 16 c)$BG_R 高         极高$C_0"
   ip_score_row IP2Location "${IP_I2L[score]}" "${IP_I2L[score]}" 33 66 99 "${IP_I2L[risk]}"
   ip_score_row Scamalytics "${IP_SCAM[score]}" "${IP_SCAM[score]}" 20 60 100 "${IP_SCAM[risk]}"
@@ -1997,11 +1972,11 @@ ip_show_factor() {
   local -a keys=(countrycode proxy tor vpn server abuser robot) labels=(地区 代理 Tor VPN 服务器 滥用 机器人)
   local -a cols
   local i j w ref
-  ui_sub "风险因子" "8 个数据库，是 = 命中"
+  ui_sub "风险因子"
   cols=()
   for i in "${!names[@]}"; do
     w=$(( ${#names[i]} > 4 ? ${#names[i]} + 1 : 5 ))
-    cols+=("$w" "$C_C${names[i]}$C_0")
+    cols+=("$w" "$C_W${names[i]}$C_0")
   done
   ip_row "库" 8 "${cols[@]}"
   for j in "${!keys[@]}"; do
@@ -2040,13 +2015,13 @@ ip_show_media() {
   local -a svcs=(tiktok disney netflix youtube prime reddit chatgpt)
   local -a head=() st=() rg=() ty=()
   local i w r c
-  ui_sub "流媒体及 AI 解锁" "方式：原生 = 直连解锁，DNS = 疑似 DNS 解锁"
+  ui_sub "流媒体及 AI 解锁"
   for i in "${!svcs[@]}"; do
     w=$(( ${#names[i]} > 8 ? ${#names[i]} + 1 : 9 ))
     r="${IP_MEDIA[${svcs[i]}.r]}"
     c="$C_G"
     [ "$r" = CN ] && c="$C_R"
-    head+=("$w" "$C_C${names[i]}$C_0")
+    head+=("$w" "$C_W${names[i]}$C_0")
     st+=("$w" "$(ip_media_tag "${IP_MEDIA[${svcs[i]}.s]}")")
     if [ -n "$r" ]; then rg+=("$w" "$c[$r]$C_0"); else rg+=("$w" "$(ip_dash)"); fi
     ty+=("$w" "$(ip_media_tag "${IP_MEDIA[${svcs[i]}.t]}")")
@@ -2059,7 +2034,7 @@ ip_show_media() {
 
 ip_show_mail() {
   local svc line="" n=0 key="邮局通信" v
-  ui_sub "邮局连通性" "本地 25 端口出站，及 12 家邮局 MX 的 25 端口"
+  ui_sub "邮局连通性"
   deps_ok dig nc timeout || return
   ip_check_mail
   ui_prog_clear
@@ -2068,7 +2043,6 @@ ip_show_mail() {
     occupied) v="${C_Y}占用$C_0" ;;
     *)        v="${C_R}阻断$C_0" ;;
   esac
-  [ "${IP_MAIL[local]}" != occupied ] && [ "$IS_ROOT" -ne 1 ] && v+="  ${C_D}非 root，未绑定本地 25 端口$C_0"
   ui_kv "本地 25 端口" "$v"
   if [ "${IP_MAIL[remote]}" != 1 ]; then
     ui_kv "$key" "${C_R}远端 25 端口不可达$C_0"
@@ -2093,19 +2067,17 @@ ip_show_mail() {
 ip_show_dnsbl() {
   local -a r
   local v
-  ui_sub "DNS 黑名单" "作者仓库 dnsbl.list，并发 dig 查询"
-  if [ "$IP_FAM" != 4 ]; then
-    ui_note "仅支持 IPv4，已跳过"
-    return
-  fi
+  # 只查 IPv4（同原版）
+  [ "$IP_FAM" = 4 ] || return
+  ui_sub "DNS 黑名单"
   deps_ok dig || return
   read -r -a r <<<"$(ip_check_dnsbl)"
   ui_prog_clear
   if [ "${r[0]:-0}" -eq 0 ]; then
-    ui_warn "黑名单列表下载失败，已跳过"
+    ui_warn "黑名单列表下载失败"
     return
   fi
-  v="${C_C}有效 ${C_BOLD}${r[0]}$C_0   ${C_G}正常 ${C_BOLD}${r[1]}$C_0   ${C_Y}已标记 ${C_BOLD}${r[2]}$C_0   ${C_R}黑名单 ${C_BOLD}${r[3]}$C_0"
+  v="${C_W}有效 ${C_BOLD}${r[0]}$C_0   ${C_G}正常 ${C_BOLD}${r[1]}$C_0   ${C_Y}已标记 ${C_BOLD}${r[2]}$C_0   ${C_R}黑名单 ${C_BOLD}${r[3]}$C_0"
   [ "${r[4]:-0}" -gt 0 ] && v+="   ${C_D}超时 ${r[4]}$C_0"
   ui_kv "黑名单库" "$v"
 }
@@ -2115,7 +2087,7 @@ ip_run() {
   if [ "$IP_FAM" = 6 ]; then IP_ADDR="$PUB6"; else IP_ADDR="$PUB4"; fi
   ui_section "IP 质量 · IPv$IP_FAM"
   if [ -z "$IP_ADDR" ]; then
-    ui_warn "没有可用的 IPv$IP_FAM 公网地址，已跳过"
+    ui_warn "没有 IPv$IP_FAM 公网地址"
     return
   fi
   deps_ok curl jq || return
@@ -2151,8 +2123,7 @@ TCP_PACKETS=25
 TCP_PARALLEL=16
 TCP_DIR=""
 TCP_PROVS=""          # 已选省份，格式 |北京||上海|；空表示全国
-TCP_NODES_SRC=""
-TCP_NODES_NOIP=0      # getNodes 中缺少 IP、被跳过的节点数（仅统计本次需要的）
+TCP_TRACE_TIMEOUT=240 # 单次路由追踪的保险超时（正常最坏约 180 秒：30 跳 x 3 探测 x 2 秒）
 TCP_IDX=0             # 延迟/丢包任务序号（各组共用，结果文件 组名_序号）
 TCP_PROBE_TOTAL=0
 TCP_ROUTE_TOTAL=0
@@ -2243,33 +2214,16 @@ tcp_prov_selected() {
   [ -z "$TCP_PROVS" ] || [[ "$TCP_PROVS" == *"|$1|"* ]]
 }
 
-tcp_prov_text() {
-  local t="${TCP_PROVS#|}"
-  t="${t%|}"
-  [ -n "$t" ] && echo "${t//||/、}" || echo "全国"
-}
-
 # ==================== 节点 ====================
 
 tcp_parse_nodes() {
-  local line type family prov isp host ip port target bhost bip bport need
+  local line type family prov isp host ip port target bhost bip bport
   TCP_CDN4=(); TCP_CDN6=(); TCP_CERNET=(); TCP_CERNET2=()
-  TCP_NODES_NOIP=0
   while IFS= read -r line; do
     line=${line//$'\t'/|}
     IFS='|' read -r type family prov isp host ip port target bhost bip bport _ <<< "$line"
     [ "$type" = "type" ] && continue
-    if [ -z "$ip" ]; then
-      case "$type:$family" in
-        cdn:4) need=$((TCP_DO_P4 + TCP_DO_L)) ;;
-        cdn:6) need=$TCP_DO_P6 ;;
-        cernet:4) need=$TCP_DO_E4 ;;
-        cernet2:6) need=$TCP_DO_E6 ;;
-        *) need=0 ;;
-      esac
-      [ "$need" -gt 0 ] && tcp_prov_selected "$prov" && TCP_NODES_NOIP=$((TCP_NODES_NOIP + 1))
-      continue
-    fi
+    [ -z "$ip" ] && continue
     port=${port:-80}
     case "$type:$family" in
       cdn:4) TCP_CDN4+=("$prov|$isp|$host|$ip|$port|$bhost|$bip|${bport:-80}") ;;
@@ -2322,15 +2276,12 @@ tcp_load_nodes() {
   if [ "$ok" -eq 1 ]; then
     tcp_parse_nodes "$f"
     if tcp_nodes_ready; then
-      TCP_NODES_SRC="getNodes 实时"
-      [ "$TCP_NODES_NOIP" -gt 0 ] && ui_note "getNodes 返回的节点中有 ${TCP_NODES_NOIP} 个暂无 IP，已跳过"
       return 0
     fi
   fi
   tcp_nodes_snapshot > "$f"
   tcp_parse_nodes "$f"
-  TCP_NODES_SRC="内置快照 $TCP_SNAPSHOT_DATE"
-  ui_note "getNodes 获取节点失败，改用内置节点快照（$TCP_SNAPSHOT_DATE）"
+  ui_warn "节点获取失败，使用内置快照（$TCP_SNAPSHOT_DATE）"
 }
 
 # 输出某组中已选省份的节点：cdn4 | cdn6 | cernet | cernet2
@@ -3107,12 +3058,16 @@ tcp_trace_one() {
       return
     fi
     args=(-4 -T -p "$port" --psize "$packet_length" -M -d disable-geoip -n -q 3 -m 30 "$target_ip")
-    output=$(nexttrace-tiny "${args[@]}" 2>&1)
+    output=$(timeout "$TCP_TRACE_TIMEOUT" nexttrace-tiny "${args[@]}" 2>&1)
     rc=$?
   else
     args=(-n "-${family}" -T -p "$port" -q 3 -w 2 -m 30 "$target_ip" "$packet_length")
-    output=$(traceroute "${args[@]}" 2>&1)
+    output=$(timeout "$TCP_TRACE_TIMEOUT" traceroute "${args[@]}" 2>&1)
     rc=$?
+  fi
+  if [ "$rc" -eq 124 ]; then
+    echo "FAIL|$prov|$isp|$protocol|$host|TIMEOUT" > "$outfile"
+    return
   fi
   {
     printf "# %s|%s|%s|%s|%s|%s\n" "$prov" "$isp" "$protocol" "$host" "$idx" "$target_ip"
@@ -3126,7 +3081,7 @@ tcp_trace_one() {
   fi
   # 10099 之后国内段全隐藏时重试一次，补全国内骨干
   if [ "$family" = "4" ] && [ "$protocol" = "tcp" ] && tcp_need_10099_retry "$trace_file"; then
-    retry_output=$(traceroute "${args[@]}" 2>&1)
+    retry_output=$(timeout "$TCP_TRACE_TIMEOUT" traceroute "${args[@]}" 2>&1)
     {
       printf "\n# retry 10099 hidden domestic segment|%s|%s|%s|%s|%s|%s\n" "$prov" "$isp" "$protocol" "$host" "$idx" "$target_ip"
       printf "target %s\n" "$target_ip"
@@ -3617,9 +3572,9 @@ tcp_summary() {  # 前缀 零丢包文字 z y h
   printf '  %s%s%s:%3d%s    %s1-20%%:%3d%s    %s>20%%:%3d%s\n' "$1" "$C_G" "$2" "$3" "$C_0" "$C_Y" "$4" "$C_0" "$C_R" "$5" "$C_0"
 }
 
-# 三网 / 大包表格：标题 结果文件 线路文件 无线路时的占位 零丢包文字 防火墙受限 备注
+# 三网 / 大包表格：标题 结果文件 线路文件 无线路时的占位 零丢包文字 防火墙受限
 tcp_show_carrier() {
-  local title="$1" result_file="$2" route_file="$3" nolabel="$4" zero_word="$5" fw="${6:-0}" note="${7:-}"
+  local title="$1" result_file="$2" route_file="$3" nolabel="$4" zero_word="$5" fw="${6:-0}"
   local prov key label lat latc loss lossc z=0 y=0 h=0 isp row
   local -A cells=()
   local -a order=()
@@ -3632,17 +3587,17 @@ tcp_show_carrier() {
     cells["$prov|$key"]=$(tcp_cell "$label" "$lat" "$latc" "$loss" "$lossc" 10 5 4)
   done < <(tcp_rows carrier "$route_file" "$result_file" "$nolabel" 5)
 
-  ui_sub "$title" "$note"
+  ui_sub "$title"
   tcp_summary "" "$zero_word" "$z" "$y" "$h"
   [ "$fw" -eq 1 ] && printf '  %s由于服务商防火墙限制，延迟和丢包无法探测%s\n' "$C_R" "$C_0"
-  row="  ${C_BOLD}${C_C}$(ui_pad "省份" 6)${C_0}  "
+  row="  ${C_BOLD}${C_W}$(ui_pad "省份" 6)${C_0}  "
   for isp in 电信 联通 移动; do
     [ "$isp" != "电信" ] && row+=" / "
-    row+="${C_C}$(ui_pad "$isp" 10) $(ui_pad "延迟" 5 r) $(ui_pad "丢包" 4 r)${C_0}"
+    row+="${C_W}$(ui_pad "$isp" 10) $(ui_pad "延迟" 5 r) $(ui_pad "丢包" 4 r)${C_0}"
   done
   printf '%s\n' "$row"
   for prov in "${order[@]}"; do
-    row="  ${C_C}$(ui_pad "$prov" 6)${C_0}  "
+    row="  ${C_W}$(ui_pad "$prov" 6)${C_0}  "
     for isp in 电信 联通 移动; do
       [ "$isp" != "电信" ] && row+=" / "
       row+="${cells["$prov|$isp"]:-$(tcp_cell "-" "-" D "-" D 10 5 4)}"
@@ -3671,19 +3626,19 @@ tcp_show_edu() {
     done < <(tcp_rows edu /dev/null "$file" "" 6 "$col")
   done
 
-  ui_sub "教育网回程" "每节点 ${TCP_PACKETS} 包"
+  ui_sub "教育网回程"
   for col in "${cols[@]}"; do
     tcp_summary "$(ui_pad "$col" 13)" "零丢包" ${sums[$col]}
   done
-  row="  ${C_BOLD}${C_C}$(ui_pad "省份" 6)${C_0}  "
+  row="  ${C_BOLD}${C_W}$(ui_pad "省份" 6)${C_0}  "
   for col in "${cols[@]}"; do
     [ "$n" -gt 0 ] && row+=" / "
-    row+="${C_C}$(ui_pad "$col" 18) $(ui_pad "延迟" 6 r) $(ui_pad "丢包" 6 r)${C_0}"
+    row+="${C_W}$(ui_pad "$col" 18) $(ui_pad "延迟" 6 r) $(ui_pad "丢包" 6 r)${C_0}"
     n=$((n + 1))
   done
   printf '%s\n' "$row"
   for prov in "${order[@]}"; do
-    row="  ${C_C}$(ui_pad "$prov" 6)${C_0}  "
+    row="  ${C_W}$(ui_pad "$prov" 6)${C_0}  "
     n=0
     for col in "${cols[@]}"; do
       [ "$n" -gt 0 ] && row+=" / "
@@ -3742,7 +3697,6 @@ tcp_run() {
   TCP_DO_L=$((TCP_LARGE * RUN_V4))
   TCP_DO_E4=$((TCP_EDU * RUN_V4))
   TCP_DO_E6=$((TCP_EDU * RUN_V6))
-  [ "$TCP_LARGE" -eq 1 ] && [ "$RUN_V4" -ne 1 ] && ui_note "大包回程仅支持 IPv4，本次未测 IPv4，已跳过"
   if [ $((TCP_DO_P4 + TCP_DO_P6 + TCP_DO_L + TCP_DO_E4 + TCP_DO_E6)) -eq 0 ]; then
     ui_warn "没有可执行的回程检测项目"
     return 0
@@ -3751,10 +3705,10 @@ tcp_run() {
   command -v traceroute >/dev/null 2>&1 && has_tr=1
   command -v nexttrace-tiny >/dev/null 2>&1 && has_nt=1
   if [ "$has_tr" -eq 0 ] && [ $((TCP_DO_P4 + TCP_DO_P6 + TCP_DO_E4 + TCP_DO_E6)) -gt 0 ]; then
-    ui_warn "缺少 traceroute，三网/教育网回程只测延迟和丢包，线路标记为「${TCP_NOLABEL}」"
+    ui_warn "缺少 traceroute，线路未识别"
   fi
   if [ "$has_nt" -eq 0 ] && [ "$TCP_DO_L" -eq 1 ]; then
-    ui_note "未安装 nexttrace-tiny，大包回程只测延迟和丢包，线路标记为「${TCP_NOLABEL}」"
+    ui_warn "缺少 nexttrace-tiny，大包线路未识别"
   fi
   TCP_DO_R4=$((TCP_DO_P4 * has_tr))
   TCP_DO_R6=$((TCP_DO_P6 * has_tr))
@@ -3774,7 +3728,6 @@ tcp_run() {
     ui_warn "所选省份没有可检测的节点"
     return 0
   fi
-  ui_note "检测范围: $(tcp_prov_text)  每节点发包: ${TCP_PACKETS}  并行: ${TCP_PARALLEL}  节点: ${TCP_NODES_SRC}"
 
   # 第一阶段：回程线路识别（后台），结束后才发 nping，避免探测流量影响路由响应
   if [ "$TCP_ROUTE_TOTAL" -gt 0 ]; then
@@ -3809,9 +3762,9 @@ tcp_run() {
     tcp_prog_probe
     sleep 0.2
   done
-  wait
-  tcp_prog_probe
+  # 先结束进度显示的后台进程，否则下面的 wait 会一直等它
   ui_prog_clear
+  wait
 
   # 大包被防火墙限制：各节点记为 SKIP（线路照常展示，延迟丢包为 -）
   if [ "$TCP_DO_L" -eq 1 ] && [ "$TCP_LARGE_FW_LIMITED" -eq 1 ]; then
@@ -3829,25 +3782,25 @@ tcp_run() {
   if [ "$TCP_DO_P4" -eq 1 ]; then
     tcp_gather cdn4 "$d/res_cdn4"
     if [ "$TCP_DO_R4" -eq 1 ]; then
-      tcp_show_carrier "三网回程 · IPv4" "$d/res_cdn4" "$d/label_route4" "" "零丢包" 0 "${n4} 个节点 / 每节点 ${TCP_PACKETS} 包"
+      tcp_show_carrier "三网回程 · IPv4" "$d/res_cdn4" "$d/label_route4" "" "零丢包" 0
     else
-      tcp_show_carrier "三网回程 · IPv4" "$d/res_cdn4" /dev/null "$TCP_NOLABEL" "零丢包" 0 "${n4} 个节点 / 每节点 ${TCP_PACKETS} 包"
+      tcp_show_carrier "三网回程 · IPv4" "$d/res_cdn4" /dev/null "$TCP_NOLABEL" "零丢包" 0
     fi
   fi
   if [ "$TCP_DO_P6" -eq 1 ]; then
     tcp_gather cdn6 "$d/res_cdn6"
     if [ "$TCP_DO_R6" -eq 1 ]; then
-      tcp_show_carrier "三网回程 · IPv6" "$d/res_cdn6" "$d/label_route6" "" "零丢包" 0 "${n6} 个节点 / 每节点 ${TCP_PACKETS} 包"
+      tcp_show_carrier "三网回程 · IPv6" "$d/res_cdn6" "$d/label_route6" "" "零丢包" 0
     else
-      tcp_show_carrier "三网回程 · IPv6" "$d/res_cdn6" /dev/null "$TCP_NOLABEL" "零丢包" 0 "${n6} 个节点 / 每节点 ${TCP_PACKETS} 包"
+      tcp_show_carrier "三网回程 · IPv6" "$d/res_cdn6" /dev/null "$TCP_NOLABEL" "零丢包" 0
     fi
   fi
   if [ "$TCP_DO_L" -eq 1 ]; then
     tcp_gather large4 "$d/res_large4"
     if [ "$TCP_DO_LR" -eq 1 ]; then
-      tcp_show_carrier "大包回程 · IPv4" "$d/res_large4" "$d/label_large4" "" "零重传" "$TCP_LARGE_FW_LIMITED" "120-1200B 混合包长 / 每节点 ${TCP_PACKETS} 包"
+      tcp_show_carrier "大包回程 · IPv4" "$d/res_large4" "$d/label_large4" "" "零重传" "$TCP_LARGE_FW_LIMITED"
     else
-      tcp_show_carrier "大包回程 · IPv4" "$d/res_large4" /dev/null "$TCP_NOLABEL" "零重传" "$TCP_LARGE_FW_LIMITED" "120-1200B 混合包长 / 每节点 ${TCP_PACKETS} 包"
+      tcp_show_carrier "大包回程 · IPv4" "$d/res_large4" /dev/null "$TCP_NOLABEL" "零重传" "$TCP_LARGE_FW_LIMITED"
     fi
   fi
   if [ $((TCP_DO_E4 + TCP_DO_E6)) -gt 0 ]; then
@@ -3863,8 +3816,6 @@ tcp_run() {
       edu+=("CERNET2-IPv6|$d/res_cernet2")
     fi
     tcp_show_edu "${edu[@]}"
-    [ "$TCP_DO_E6" -eq 0 ] && ui_note "CERNET2 需要 IPv6，本次未测"
-    [ "$TCP_DO_E4" -eq 0 ] && ui_note "CERNET 需要 IPv4，本次未测"
   fi
   return 0
 }
@@ -4193,9 +4144,11 @@ parse_args() {
 show_menu() {
   local tag="" choice n ok
   [ "$IS_ROOT" -eq 0 ] && tag="${C_D}(需 root，当前不可用)${C_0}" || tag="${C_D}(需 root)${C_0}"
+  local err=""
   while :; do
+    ui_clear
     {
-      printf '%s%s%s\n' "$C_BOLD$C_C" "$(ui_pad "VPSCheck v${VERSION}" "$UI_W" c)" "$C_0"
+      printf '%s%s%s\n' "$C_BOLD$C_W" "$(ui_pad "VPSCheck v${VERSION}" "$UI_W" c)" "$C_0"
       ui_line '='
       printf '  1. %s\n' "全部检测"
       printf '  2. %s %s\n' "$(ui_pad 网络信息 14)" "${C_D}BGP / 上游 / NAT${C_0}"
@@ -4206,6 +4159,7 @@ show_menu() {
       printf '  7. %s %s %s\n' "$(ui_pad 教育网回程 14)" "$(ui_pad "${C_D}CERNET / CERNET2${C_0}" 30)" "$tag"
       printf '  0. 退出\n'
       ui_line '-'
+      [ -n "$err" ] && echo "${C_Y}${err}${C_0}"
     } >&2
     read -r -p "请选择（可多选，空格分隔，如 2 3 4）: " choice </dev/tty || exit 1
     ok=1
@@ -4225,7 +4179,7 @@ show_menu() {
     done
     [ "$ok" -eq 1 ] && break
     DO_NET=0; DO_IP=0; TCP_ROUTE=0; TCP_LARGE=0; TCP_EDU=0
-    echo "${C_Y}输入无效，请重新选择${C_0}" >&2
+    err="输入无效，请重新选择"
   done
 
   [ $((OPT_ONLY4 + OPT_ONLY6)) -eq 0 ] && show_fam_menu
@@ -4233,32 +4187,34 @@ show_menu() {
 
 # 协议选择：自动按检测结果，或指定 IPv4 / IPv6
 show_fam_menu() {
-  local choice auto
+  local choice auto err=""
   if [ "$HAS_V4" -eq 1 ] && [ "$HAS_V6" -eq 1 ]; then auto="双栈"
   elif [ "$HAS_V4" -eq 1 ]; then auto="IPv4"
   else auto="IPv6"; fi
-  {
-    printf '\n'
-    ui_line '-'
-    ui_kv "IPv4" "${PUB4:-${C_D}未检测到${C_0}}"
-    ui_kv "IPv6" "${PUB6:-${C_D}未检测到${C_0}}"
-    ui_line '-'
-    printf '  1. 自动 %s\n' "${C_D}(按检测结果：${auto})${C_0}"
-    printf '  2. 仅 IPv4\n'
-    printf '  3. 仅 IPv6\n'
-    printf '  0. 退出\n'
-    ui_line '-'
-  } >&2
   while :; do
-    read -r -p "测试协议（回车=自动）: " choice </dev/tty || exit 1
+    ui_clear
+    {
+      printf '%s%s%s\n' "$C_BOLD$C_W" "$(ui_pad "测试协议" "$UI_W" c)" "$C_0"
+      ui_line '='
+      ui_kv "IPv4" "${PUB4:-${C_D}未检测到${C_0}}"
+      ui_kv "IPv6" "${PUB6:-${C_D}未检测到${C_0}}"
+      ui_line '-'
+      printf '  1. 自动 %s\n' "${C_D}(${auto})${C_0}"
+      printf '  2. 仅 IPv4\n'
+      printf '  3. 仅 IPv6\n'
+      printf '  0. 退出\n'
+      ui_line '-'
+      [ -n "$err" ] && echo "${C_Y}${err}${C_0}"
+    } >&2
+    read -r -p "请选择（回车=自动）: " choice </dev/tty || exit 1
     case "${choice// /}" in
       ""|1) return 0 ;;
       2) [ "$HAS_V4" -eq 1 ] && { OPT_ONLY4=1; return 0; }
-         echo "${C_Y}本机没有 IPv4 公网地址，请重新选择${C_0}" >&2 ;;
+         err="本机没有 IPv4 公网地址，请重新选择" ;;
       3) [ "$HAS_V6" -eq 1 ] && { OPT_ONLY6=1; return 0; }
-         echo "${C_Y}本机没有 IPv6 公网地址，请重新选择${C_0}" >&2 ;;
+         err="本机没有 IPv6 公网地址，请重新选择" ;;
       0) exit 0 ;;
-      *) echo "${C_Y}输入无效，请重新选择${C_0}" >&2 ;;
+      *) err="输入无效，请重新选择" ;;
     esac
   done
 }
@@ -4278,7 +4234,7 @@ selected_items() {
 
 print_header() {
   ui_line '='
-  printf '%s%s%s\n' "$C_BOLD$C_C" "$(ui_pad "VPSCheck v${VERSION}  -  VPS 综合检测" "$UI_W" c)" "$C_0"
+  printf '%s%s%s\n' "$C_BOLD$C_W" "$(ui_pad "VPSCheck v${VERSION}  -  VPS 综合检测" "$UI_W" c)" "$C_0"
   ui_line '='
   ui_kv "检测时间" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
   ui_kv "IPv4" "${PUB4:-${C_D}未检测到${C_0}}"
@@ -4306,7 +4262,7 @@ run_checks() {
       tcp_run
     else
       ui_section "TCP 回程"
-      ui_warn "回程检测需要 root 权限（发送裸 TCP SYN），已跳过。请使用 root 运行。"
+      ui_warn "回程检测需要 root 权限"
     fi
   fi
 
@@ -4351,6 +4307,7 @@ main() {
   if [ "$has_items" -eq 0 ]; then
     if [ -t 0 ] && [ -t 2 ]; then
       show_menu
+      ui_clear
     else
       show_help >&2
       exit 1
@@ -4367,6 +4324,7 @@ main() {
   fi
 
   ensure_deps
+  [ "$has_items" -eq 0 ] && ui_clear
 
   if [ -n "$OPT_OUTPUT" ]; then
     local raw="$WORKDIR/report.ansi"
