@@ -63,10 +63,12 @@ DO_IP=0
 TCP_ROUTE=0
 TCP_LARGE=0
 TCP_EDU=0
+TCP_PATH=0            # 三网回程路由（逐跳）
 
 # 参数
 OPT_COUNT=""
 OPT_PROVINCES=()
+OPT_PATH_PROVINCES=() # 三网回程路由的省份，空表示默认北京 / 上海 / 广东
 OPT_OUTPUT=""
 OPT_YES=0
 OPT_ONLY4=0
@@ -360,6 +362,9 @@ missing_commands() {
   if [ "$IS_ROOT" -eq 1 ] && [ $((TCP_ROUTE + TCP_LARGE + TCP_EDU)) -gt 0 ]; then
     need+=("${DEPS_TCP[@]}")
     [ "$TCP_LARGE" -eq 1 ] && [ "$RUN_V4" -eq 1 ] && need+=("${DEPS_LARGE_OPT[@]}")
+  elif [ "$IS_ROOT" -eq 1 ] && [ "$TCP_PATH" -eq 1 ]; then
+    # 只看回程路由时不发 nping，只需 traceroute
+    need+=(curl traceroute)
   fi
   for c in "${need[@]}"; do
     command -v "$c" >/dev/null 2>&1 && continue
@@ -2164,7 +2169,9 @@ ip_run() {
 # ==================== 模块：TCP 回程 ====================
 # 移植自 ibsgss/TcpQuality（GPL-3.0）runTcpQuality-core.sh：
 #   三网回程（nping SYN 测延迟/丢包 + traceroute 识别回程线路）、大包回程、教育网回程。
-# 入口 tcp_run；读取 TCP_ROUTE / TCP_LARGE / TCP_EDU、RUN_V4 / RUN_V6、OPT_COUNT、OPT_PROVINCES。
+#   另有三网回程路由（逐跳显示 traceroute 结果与 ASN），为本项目新增。
+# 入口 tcp_run；读取 TCP_ROUTE / TCP_LARGE / TCP_EDU / TCP_PATH、RUN_V4 / RUN_V6、OPT_COUNT、
+# OPT_PROVINCES、OPT_PATH_PROVINCES。
 # 只做本地探测，不上传任何结果；临时文件全部放在 $WORKDIR/tcp。
 
 TCP_NODES_URL="${TCP_NODES_URL:-https://tcpquality.ibsgss.uk/getNodes}"
@@ -2188,9 +2195,20 @@ TCP_CDN6=()
 TCP_CERNET=()
 TCP_CERNET2=()
 
-# 各子项开关（tcp_run 内计算）：P=延迟丢包探测，R=线路识别
+# 各子项开关（tcp_run 内计算）：P=延迟丢包探测，R=线路识别，
+# PA=显示回程路由，PT=为回程路由单独追踪（三网回程已追踪过所选省份时直接复用）
 TCP_DO_P4=0; TCP_DO_P6=0; TCP_DO_L=0; TCP_DO_E4=0; TCP_DO_E6=0
 TCP_DO_R4=0; TCP_DO_R6=0; TCP_DO_LR=0; TCP_DO_ER4=0; TCP_DO_ER6=0
+TCP_DO_PA4=0; TCP_DO_PA6=0; TCP_DO_PT4=0; TCP_DO_PT6=0
+
+# 三网回程路由：省份（顺序即显示顺序）与数据来源（route4/6 复用三网回程，path4/6 单独追踪）
+TCP_PATH_DEFAULT=(北京 上海 广东)
+TCP_PATH_ORDER=()
+TCP_PATH_PROVS=""     # 格式同 TCP_PROVS
+TCP_PATH_SRC4=path4
+TCP_PATH_SRC6=path6
+TCP_PROV_ORDER=(北京 天津 河北 山西 内蒙古 辽宁 吉林 黑龙江 上海 江苏 浙江 安徽 福建 江西 山东 河南
+  湖北 湖南 广东 广西 海南 重庆 四川 贵州 云南 西藏 陕西 甘肃 青海 宁夏 新疆)
 
 # 大包：小包 120-480B 与大包 900-1200B 混发，大包约占 3/4
 TCP_LARGE_SMALL_SIZES=(120 240 480)
@@ -2265,6 +2283,28 @@ tcp_prov_selected() {
   [ -z "$TCP_PROVS" ] || [[ "$TCP_PROVS" == *"|$1|"* ]]
 }
 
+# 三网回程路由的省份：OPT_PATH_PROVINCES，空或全部无效时用默认三省
+tcp_set_path_provinces() {
+  local p name
+  TCP_PATH_ORDER=()
+  for p in "${OPT_PATH_PROVINCES[@]}"; do
+    if name=$(tcp_province_from_code "$p"); then
+      [[ " ${TCP_PATH_ORDER[*]} " == *" $name "* ]] || TCP_PATH_ORDER+=("$name")
+    else
+      ui_warn "不支持的省份代码: $p，已忽略"
+    fi
+  done
+  [ "${#TCP_PATH_ORDER[@]}" -eq 0 ] && TCP_PATH_ORDER=("${TCP_PATH_DEFAULT[@]}")
+  TCP_PATH_PROVS=""
+  for name in "${TCP_PATH_ORDER[@]}"; do TCP_PATH_PROVS+="|$name|"; done
+}
+
+# 三网回程（TCP_PROVS 范围）是否已覆盖回程路由的全部省份
+tcp_path_covered() {
+  local name
+  for name in "${TCP_PATH_ORDER[@]}"; do tcp_prov_selected "$name" || return 1; done
+}
+
 # ==================== 节点 ====================
 
 tcp_parse_nodes() {
@@ -2287,15 +2327,15 @@ tcp_parse_nodes() {
 
 # 本次需要的节点组是否都已拿到
 tcp_nodes_ready() {
-  { [ $((TCP_DO_P4 + TCP_DO_L)) -eq 0 ] || [ "${#TCP_CDN4[@]}" -gt 0 ]; } &&
-    { [ "$TCP_DO_P6" -eq 0 ] || [ "${#TCP_CDN6[@]}" -gt 0 ]; } &&
+  { [ $((TCP_DO_P4 + TCP_DO_L + TCP_DO_PA4)) -eq 0 ] || [ "${#TCP_CDN4[@]}" -gt 0 ]; } &&
+    { [ $((TCP_DO_P6 + TCP_DO_PA6)) -eq 0 ] || [ "${#TCP_CDN6[@]}" -gt 0 ]; } &&
     { [ "$TCP_DO_E4" -eq 0 ] || [ "${#TCP_CERNET[@]}" -gt 0 ]; } &&
     { [ "$TCP_DO_E6" -eq 0 ] || [ "${#TCP_CERNET2[@]}" -gt 0 ]; }
 }
 
 # getNodes 的 scope：只取本次需要的节点组（三网与教育网分开取，比 scope=all 小且快）
 tcp_nodes_scopes() {
-  local c4=$((TCP_DO_P4 + TCP_DO_L)) c6=$TCP_DO_P6
+  local c4=$((TCP_DO_P4 + TCP_DO_L + TCP_DO_PA4)) c6=$((TCP_DO_P6 + TCP_DO_PA6))
   if [ "$c4" -gt 0 ] && [ "$c6" -gt 0 ]; then echo cdn
   elif [ "$c4" -gt 0 ]; then echo v4
   elif [ "$c6" -gt 0 ]; then echo v6
@@ -3207,6 +3247,8 @@ tcp_start_routes() {
     [ "$TCP_DO_R6" -eq 1 ] && tcp_collect_routes cdn6 6 "$TCP_DIR/label_route6" route6
     [ "$TCP_DO_ER4" -eq 1 ] && tcp_collect_routes cernet 4 "$TCP_DIR/label_edu4" eroute4
     [ "$TCP_DO_ER6" -eq 1 ] && tcp_collect_routes cernet2 6 "$TCP_DIR/label_edu6" eroute6
+    [ "$TCP_DO_PT4" -eq 1 ] && TCP_PROVS="$TCP_PATH_PROVS" tcp_collect_routes cdn4 4 "$TCP_DIR/label_path4" path4
+    [ "$TCP_DO_PT6" -eq 1 ] && TCP_PROVS="$TCP_PATH_PROVS" tcp_collect_routes cdn6 6 "$TCP_DIR/label_path6" path6
   ) > "$TCP_DIR/route.log" 2>&1 &
   TCP_ROUTE_PID=$!
 }
@@ -3495,7 +3537,7 @@ tcp_v6_precheck() {
 tcp_count_done() {
   local n=0 p f
   local -a pats=(cdn4 cdn6 large4 cernet cernet2)
-  [ "$1" = "route" ] && pats=(route4 route6 lroute4 eroute4 eroute6)
+  [ "$1" = "route" ] && pats=(route4 route6 lroute4 eroute4 eroute6 path4 path6)
   for p in "${pats[@]}"; do
     for f in "$TCP_DIR/${p}_"[0-9]*; do
       [ -e "$f" ] && n=$((n + 1))
@@ -3700,6 +3742,147 @@ tcp_show_edu() {
   tcp_legend
 }
 
+# 解析一条 traceroute 结果（取最后一段，即 10099 重试后的结果），按 ASN 合并连续跳。
+# 输入：cymru 原始结果文件 trace 文件；输出：
+#   PATH|AS1 -> AS2 …（连续相同的 ASN 只记一次）
+#   HOP|起始跳|结束跳|IP|延迟ms|ASN|国家|AS 名称|类型（hop / star / lan）
+tcp_path_hops() {
+  awk -F'|' '
+    function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
+    function lan(ip,   p) {
+      if (ip ~ /:/) return (tolower(ip) ~ /^(fc|fd|fe80:)/)
+      split(ip, p, ".")
+      return (p[1] == 10 || p[1] == 127 || (p[1] == 100 && p[2] >= 64 && p[2] <= 127) ||
+              (p[1] == 169 && p[2] == 254) || (p[1] == 172 && p[2] >= 16 && p[2] <= 31) ||
+              (p[1] == 192 && p[2] == 168))
+    }
+    function flush() {
+      if (g_kind == "") return
+      print "HOP|" g_first "|" g_last "|" g_ip "|" g_rtt "|" g_asn "|" g_cc "|" g_name "|" g_kind
+      g_kind = ""
+    }
+    FILENAME == ARGV[1] {
+      if (NF < 7) next
+      a = trim($1); ip = tolower(trim($2)); cc = trim($4); nm = trim($7)
+      sub(/, [A-Z][A-Z]$/, "", nm)
+      if (a ~ /^[0-9]+$/) { asn[ip] = "AS" a; ccs[ip] = cc; name[ip] = nm }
+      next
+    }
+    FNR == 1 { FS = " " }
+    /^#/ { n = 0; next }
+    $1 ~ /^[0-9]+$/ {
+      n++; hop[n] = $1; hip[n] = ""; hrtt[n] = ""
+      for (i = 2; i <= NF; i++) {
+        t = $i
+        if (hip[n] == "" && (t ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || t ~ /^[0-9A-Fa-f:]+:[0-9A-Fa-f:]*$/)) { hip[n] = tolower(t); continue }
+        if (hip[n] != "" && hrtt[n] == "" && t ~ /^[0-9]+(\.[0-9]+)?$/ && $(i + 1) == "ms") hrtt[n] = t
+      }
+    }
+    END {
+      path = ""; last_asn = ""
+      for (k = 1; k <= n; k++) {
+        ip = hip[k]
+        if (ip == "") { kind = "star"; key = "*"; a = ""; c = ""; nm = "" }
+        else if (lan(ip)) { kind = "lan"; key = "lan"; a = ""; c = ""; nm = "" }
+        else {
+          kind = "hop"; a = asn[ip]; c = ccs[ip]; nm = name[ip]
+          key = (a != "") ? a "|" c : "ip:" ip
+        }
+        if (a != "" && a != last_asn) { path = path (path == "" ? "" : " -> ") a; last_asn = a }
+        if (g_kind != "" && key == g_key) { g_last = hop[k]; continue }
+        flush()
+        g_kind = kind; g_key = key; g_first = hop[k]; g_last = hop[k]
+        g_ip = ip; g_rtt = hrtt[k]; g_asn = a; g_cc = c; g_name = nm
+      }
+      flush()
+      print "PATH|" path
+    }
+  ' "$1" "$2"
+}
+
+# 三网回程路由：协议族 数据来源（route4/6 或 path4/6）
+tcp_show_path() {
+  local fam="$1" src="$2" prov isp label f tf rec first last ip rtt asn cc name kind
+  local path hop lat latc ipw=15 used w n=0
+  local -a out
+  local cymru="$TCP_DIR/$src.cymru" labels="$TCP_DIR/label_${src}"
+  [ "$src" = route4 ] && labels="$TCP_DIR/label_route4"
+  [ "$src" = route6 ] && labels="$TCP_DIR/label_route6"
+  [ -f "$cymru" ] || cymru=/dev/null
+  [ "$fam" = 6 ] && ipw=26
+  ui_sub "三网回程路由 · IPv$fam"
+  for prov in "${TCP_PATH_ORDER[@]}"; do
+    for isp in 电信 联通 移动; do
+      tf=""
+      for f in "$TCP_DIR/${src}_trace_"[0-9]*; do
+        [[ "$f" == *.ips ]] && continue
+        [ -f "$f" ] && [ "$(head -n 1 "$f" | cut -d'|' -f1-2)" = "# $prov|$isp" ] && { tf="$f"; break; }
+      done
+      label=$(awk -F'|' -v p="$prov" -v i="$isp" '$2 == p && $3 == i { print ($1 == "OK") ? $6 : "Hidden"; exit }' "$labels" 2>/dev/null)
+      [ -n "$label" ] || label=Hidden
+      if [ "$label" = Hidden ]; then label="$C_D$label$C_0"; fi
+      # 各条路由之间空一行
+      [ "$n" -gt 0 ] && printf '\n'
+      n=$((n + 1))
+      printf '  %s%s %s%s  %s\n' "$C_BOLD$C_C" "$prov" "$isp" "$C_0" "$label"
+      if [ -z "$tf" ]; then
+        printf '  %s追踪失败%s\n' "$C_D" "$C_0"
+        continue
+      fi
+      # 路径行在 tcp_path_hops 输出的最后，先打印
+      mapfile -t out < <(tcp_path_hops "$cymru" "$tf")
+      path="${out[${#out[@]} - 1]#PATH|}"
+      [ -n "$path" ] && printf '  %s路径%s  %s\n' "$C_C" "$C_0" "$(tcp_path_wrap "$path")"
+      for rec in "${out[@]}"; do
+        IFS='|' read -r rec first last ip rtt asn cc name kind <<<"$rec"
+        [ "$rec" = HOP ] || continue
+        hop=$first
+        [ "$last" != "$first" ] && hop="$first-$last"
+        case "$kind" in
+          star) printf '  %5s  %s%8s%s\n' "$hop" "$C_D" "*" "$C_0"; continue ;;
+        esac
+        if [[ "$rtt" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+          printf -v lat '%.2fms' "$rtt"
+          latc=$C_G
+          awk -v v="$rtt" 'BEGIN { exit !(v > 240) }' && latc=$C_R
+          awk -v v="$rtt" 'BEGIN { exit !(v > 150 && v <= 240) }' && latc=$C_Y
+        else
+          lat="-"; latc=$C_D
+        fi
+        if [ "$kind" = lan ]; then
+          printf '  %5s  %s%8s%s  %-*s  %s%s%s\n' "$hop" "$latc" "$lat" "$C_0" "$ipw" "$ip" "$C_D" "内网" "$C_0"
+          continue
+        fi
+        # 序号 5 + 延迟 8 + IP + ASN 9 + [国家] 5，AS 名称占剩余宽度
+        used=$(( 2 + 5 + 2 + 8 + 2 + (${#ip} > ipw ? ${#ip} : ipw) + 2 + 9 + 1 + 5 ))
+        w=$(( UI_W - used ))
+        if [ -n "$asn" ]; then
+          name=$(ip_fit "$name" "$w")
+          [ "$w" -lt 6 ] && name=""
+          printf '  %5s  %s%8s%s  %-*s  %s%-9s%s %s%s%s%s\n' "$hop" "$latc" "$lat" "$C_0" "$ipw" "$ip" \
+            "$C_G" "$asn" "$C_0" "$C_G" "[${cc:-??}]" "$C_0" "${name:+ $name}"
+        else
+          printf '  %5s  %s%8s%s  %-*s  %s%s%s\n' "$hop" "$latc" "$lat" "$C_0" "$ipw" "$ip" "$C_D" "未知 ASN" "$C_0"
+        fi
+      done
+    done
+  done
+}
+
+# ASN 路径超过一行时在「 -> 」处换行，续行与首行内容对齐
+tcp_path_wrap() {
+  local text="$1" out="" line="" part w=$(( UI_W - 8 ))
+  local -a parts
+  IFS=$'\n' read -r -d '' -a parts < <(printf '%s' "${text// -> /$'\n'}"; printf '\0')
+  for part in "${parts[@]}"; do
+    if [ -z "$line" ]; then line="$part"
+    elif [ $(( ${#line} + 4 + ${#part} )) -le "$w" ]; then line+=" -> $part"
+    else out+="$line ->"$'\n'"        "; line="$part"
+    fi
+  done
+  printf '%s' "$out$line"
+}
+
 # 教育网结果附上线路标签（第 10 列），与原脚本一致：识别失败记 Hidden，探测失败记 failed
 tcp_edu_attach() {
   local result_file="$1" label_file="$2" out="$3" ran="$4" status prov isp host ip snd rcv loss lat label
@@ -3719,15 +3902,13 @@ tcp_edu_attach() {
 # ==================== 入口 ====================
 
 tcp_run() {
-  local has_tr=0 has_nt=0 n4=0 n6=0 ne4=0 ne6=0 i large_n=0 prov isp host ip _r
-  local d
+  local has_tr=0 has_nt=0 n4=0 n6=0 ne4=0 ne6=0 np4=0 np6=0
   ui_section "TCP 回程"
 
   if [ -z "$WORKDIR" ] || [ ! -d "$WORKDIR" ]; then
     ui_err "临时目录不可用，已跳过回程检测"
     return 1
   fi
-  deps_ok nping || return 0
   TCP_DIR="$WORKDIR/tcp"
   rm -rf "$TCP_DIR"
   mkdir -p "$TCP_DIR" || { ui_err "无法创建临时目录 $TCP_DIR"; return 1; }
@@ -3747,7 +3928,12 @@ tcp_run() {
   TCP_DO_L=$((TCP_LARGE * RUN_V4))
   TCP_DO_E4=$((TCP_EDU * RUN_V4))
   TCP_DO_E6=$((TCP_EDU * RUN_V6))
-  if [ $((TCP_DO_P4 + TCP_DO_P6 + TCP_DO_L + TCP_DO_E4 + TCP_DO_E6)) -eq 0 ]; then
+  TCP_DO_PA4=$((TCP_PATH * RUN_V4))
+  TCP_DO_PA6=$((TCP_PATH * RUN_V6))
+  if [ $((TCP_DO_P4 + TCP_DO_P6 + TCP_DO_L + TCP_DO_E4 + TCP_DO_E6)) -gt 0 ] && ! deps_ok nping; then
+    TCP_DO_P4=0; TCP_DO_P6=0; TCP_DO_L=0; TCP_DO_E4=0; TCP_DO_E6=0
+  fi
+  if [ $((TCP_DO_P4 + TCP_DO_P6 + TCP_DO_L + TCP_DO_E4 + TCP_DO_E6 + TCP_DO_PA4 + TCP_DO_PA6)) -eq 0 ]; then
     ui_warn "没有可执行的回程检测项目"
     return 0
   fi
@@ -3760,11 +3946,25 @@ tcp_run() {
   if [ "$has_nt" -eq 0 ] && [ "$TCP_DO_L" -eq 1 ]; then
     ui_warn "缺少 nexttrace-tiny，大包线路未识别"
   fi
+  if [ "$has_tr" -eq 0 ] && [ $((TCP_DO_PA4 + TCP_DO_PA6)) -gt 0 ]; then
+    ui_warn "缺少 traceroute，无法显示三网回程路由"
+    TCP_DO_PA4=0; TCP_DO_PA6=0
+  fi
   TCP_DO_R4=$((TCP_DO_P4 * has_tr))
   TCP_DO_R6=$((TCP_DO_P6 * has_tr))
   TCP_DO_LR=$((TCP_DO_L * has_nt))
   TCP_DO_ER4=$((TCP_DO_E4 * has_tr))
   TCP_DO_ER6=$((TCP_DO_E6 * has_tr))
+  # 回程路由：三网回程已追踪过所选省份时直接复用其数据，否则单独追踪
+  tcp_set_path_provinces
+  TCP_PATH_SRC4=path4; TCP_PATH_SRC6=path6
+  if tcp_path_covered; then
+    [ "$TCP_DO_R4" -eq 1 ] && TCP_PATH_SRC4=route4
+    [ "$TCP_DO_R6" -eq 1 ] && TCP_PATH_SRC6=route6
+  fi
+  TCP_DO_PT4=0; TCP_DO_PT6=0
+  [ "$TCP_DO_PA4" -eq 1 ] && [ "$TCP_PATH_SRC4" = path4 ] && TCP_DO_PT4=1
+  [ "$TCP_DO_PA6" -eq 1 ] && [ "$TCP_PATH_SRC6" = path6 ] && TCP_DO_PT6=1
 
   ui_prog "正在获取回程节点"
   tcp_load_nodes
@@ -3772,22 +3972,39 @@ tcp_run() {
   n6=$(tcp_count cdn6)
   ne4=$(tcp_count cernet)
   ne6=$(tcp_count cernet2)
-  TCP_ROUTE_TOTAL=$((TCP_DO_R4 * n4 + TCP_DO_LR * n4 + TCP_DO_R6 * n6 + TCP_DO_ER4 * ne4 + TCP_DO_ER6 * ne6))
+  np4=$(TCP_PROVS="$TCP_PATH_PROVS" tcp_count cdn4)
+  np6=$(TCP_PROVS="$TCP_PATH_PROVS" tcp_count cdn6)
+  TCP_ROUTE_TOTAL=$((TCP_DO_R4 * n4 + TCP_DO_LR * n4 + TCP_DO_R6 * n6 + TCP_DO_ER4 * ne4 + TCP_DO_ER6 * ne6 \
+    + TCP_DO_PT4 * np4 + TCP_DO_PT6 * np6))
   TCP_PROBE_TOTAL=$((TCP_DO_P4 * n4 + TCP_DO_L * n4 + TCP_DO_P6 * n6 + TCP_DO_E4 * ne4 + TCP_DO_E6 * ne6))
-  if [ "$TCP_PROBE_TOTAL" -eq 0 ]; then
+  if [ $((TCP_PROBE_TOTAL + TCP_DO_PA4 * np4 + TCP_DO_PA6 * np6)) -eq 0 ]; then
     ui_warn "所选省份没有可检测的节点"
     return 0
   fi
 
   # 第一阶段：回程线路识别（后台），结束后才发 nping，避免探测流量影响路由响应
-  if [ "$TCP_ROUTE_TOTAL" -gt 0 ]; then
+  if [ "$TCP_PROBE_TOTAL" -eq 0 ]; then
+    TCP_STEP_ROUTE="回程路由追踪"
+  else
     TCP_STEP_ROUTE="[1/2] 回程线路识别"
     TCP_STEP_PROBE="[2/2] 延迟丢包探测"
+    [ "$TCP_ROUTE_TOTAL" -eq 0 ] && TCP_STEP_PROBE="延迟丢包探测"
+  fi
+  if [ "$TCP_ROUTE_TOTAL" -gt 0 ]; then
     tcp_start_routes
     tcp_wait_routes
-  else
-    TCP_STEP_PROBE="延迟丢包探测"
   fi
+  ui_prog_clear
+  if [ "$TCP_PROBE_TOTAL" -gt 0 ]; then
+    tcp_probe_phase
+  fi
+  tcp_show_results
+}
+
+# 第二、三阶段：预检与延迟 / 丢包探测
+tcp_probe_phase() {
+  local n4 i large_n=0 prov isp host ip _r
+  n4=$(tcp_count cdn4)
 
   # 第二阶段：预检
   if [ $((TCP_DO_P6 + TCP_DO_E6)) -gt 0 ]; then
@@ -3826,9 +4043,11 @@ tcp_run() {
     done < <(tcp_selected cdn4)
     [ "$large_n" -gt "$TCP_IDX" ] && TCP_IDX=$large_n
   fi
+}
 
-  # 汇总与展示
-  d="$TCP_DIR"
+# 汇总与展示
+tcp_show_results() {
+  local d="$TCP_DIR"
   if [ "$TCP_DO_P4" -eq 1 ]; then
     tcp_gather cdn4 "$d/res_cdn4"
     if [ "$TCP_DO_R4" -eq 1 ]; then
@@ -3867,6 +4086,8 @@ tcp_run() {
     fi
     tcp_show_edu "${edu[@]}"
   fi
+  [ "$TCP_DO_PA4" -eq 1 ] && tcp_show_path 4 "$TCP_PATH_SRC4"
+  [ "$TCP_DO_PA6" -eq 1 ] && tcp_show_path 6 "$TCP_PATH_SRC6"
   return 0
 }
 
@@ -4144,16 +4365,19 @@ VPSCheck v${VERSION} - VPS 检测脚本
   -R                三网回程
   -L                大包回程（仅 IPv4）
   -E                教育网回程（CERNET / CERNET2）
+  -P                三网回程路由（逐跳，默认北京 / 上海 / 广东）
 
 其他选项:
   -4 / -6           只测 IPv4 / IPv6
   -c NUM            回程每节点发包数（1-600）
   --province CODE   回程只测指定省份，可重复（如 bj、sh、gd 或 北京）
+  --route-province CODE
+                    三网回程路由的省份，可重复（默认 bj、sh、gd）
   -o FILE           报告另存为纯文本
   -y                缺少依赖时自动安装，不询问
   -h                显示帮助
 
-回程检测（-T/-R/-L/-E）需要 root 权限。
+回程检测（-T/-R/-L/-E/-P）需要 root 权限。
 EOF
 }
 
@@ -4161,13 +4385,14 @@ parse_args() {
   local any=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      -A) DO_NET=1; DO_IP=1; TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1; any=1 ;;
+      -A) DO_NET=1; DO_IP=1; TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1; TCP_PATH=1; any=1 ;;
       -N) DO_NET=1; any=1 ;;
       -I) DO_IP=1; any=1 ;;
       -T) TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1; any=1 ;;
       -R) TCP_ROUTE=1; any=1 ;;
       -L) TCP_LARGE=1; any=1 ;;
       -E) TCP_EDU=1; any=1 ;;
+      -P) TCP_PATH=1; any=1 ;;
       -4) OPT_ONLY4=1 ;;
       -6) OPT_ONLY6=1 ;;
       -c)
@@ -4176,6 +4401,9 @@ parse_args() {
       --province)
         [ -n "${2:-}" ] || { echo "--province 需要参数" >&2; exit 1; }
         OPT_PROVINCES+=("$2"); shift ;;
+      --route-province)
+        [ -n "${2:-}" ] || { echo "--route-province 需要参数" >&2; exit 1; }
+        OPT_PATH_PROVINCES+=("$2"); shift ;;
       -o)
         [ -n "${2:-}" ] && [[ "$2" != -* ]] || { echo "-o 需要文件路径" >&2; exit 1; }
         OPT_OUTPUT="$2"; shift ;;
@@ -4192,7 +4420,7 @@ parse_args() {
 }
 
 show_menu() {
-  local tag="" choice n ok
+  local tag="" choice n ok ask_path=0
   local -a picks
   [ "$IS_ROOT" -eq 0 ] && tag="${C_D}(需 root，当前不可用)${C_0}" || tag="${C_D}(需 root)${C_0}"
   local err=""
@@ -4208,6 +4436,7 @@ show_menu() {
       printf '  5. %s %s %s\n' "$(ui_pad 三网回程 14)" "$(ui_pad "${C_D}线路类型 / 丢包 / 延迟${C_0}" 30)" "$tag"
       printf '  6. %s %s %s\n' "$(ui_pad 大包回程 14)" "$(ui_pad "${C_D}大包预检 / 丢包 / 线路${C_0}" 30)" "$tag"
       printf '  7. %s %s %s\n' "$(ui_pad 教育网回程 14)" "$(ui_pad "${C_D}CERNET / CERNET2${C_0}" 30)" "$tag"
+      printf '  8. %s %s %s\n' "$(ui_pad 三网回程路由 14)" "$(ui_pad "${C_D}逐跳路由 / ASN / 可选省份${C_0}" 30)" "$tag"
       printf '  0. 退出\n'
       ui_line '-'
       [ -n "$err" ] && echo "${C_Y}${err}${C_0}"
@@ -4219,22 +4448,64 @@ show_menu() {
     for n in "${picks[@]}"; do
       case "$n" in
         0) exit 0 ;;
-        1) DO_NET=1; DO_IP=1; TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1 ;;
+        1) DO_NET=1; DO_IP=1; TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1; TCP_PATH=1 ;;
         2) DO_NET=1 ;;
         3) DO_IP=1 ;;
         4) TCP_ROUTE=1; TCP_LARGE=1; TCP_EDU=1 ;;
         5) TCP_ROUTE=1 ;;
         6) TCP_LARGE=1 ;;
         7) TCP_EDU=1 ;;
+        8) TCP_PATH=1; ask_path=1 ;;
         *) ok=0 ;;
       esac
     done
     [ "$ok" -eq 1 ] && break
-    DO_NET=0; DO_IP=0; TCP_ROUTE=0; TCP_LARGE=0; TCP_EDU=0
+    DO_NET=0; DO_IP=0; TCP_ROUTE=0; TCP_LARGE=0; TCP_EDU=0; TCP_PATH=0; ask_path=0
     err="输入无效，请重新选择"
   done
 
+  # 单独选「三网回程路由」时选省份；「全部检测」固定北京 / 上海 / 广东
+  [ "$ask_path" -eq 1 ] && [ "${#OPT_PATH_PROVINCES[@]}" -eq 0 ] && show_path_menu
   [ $((OPT_ONLY4 + OPT_ONLY6)) -eq 0 ] && show_fam_menu
+}
+
+# 三网回程路由的省份选择：回车为默认三省，可输入编号、代码或省名
+show_path_menu() {
+  local choice err="" i n line p name
+  local -a picks provs
+  while :; do
+    ui_clear
+    {
+      printf '%s%s%s\n' "$C_BOLD$C_W" "$(ui_pad "三网回程路由 - 选择省份" "$UI_W" c)" "$C_0"
+      ui_line '='
+      line=""
+      for i in "${!TCP_PROV_ORDER[@]}"; do
+        line+="$(ui_pad "$(printf '%3d. %s' $((i + 1)) "${TCP_PROV_ORDER[i]}")" 15)"
+        if [ $(((i + 1) % 5)) -eq 0 ]; then printf ' %s\n' "${line%"${line##*[! ]}"}"; line=""; fi
+      done
+      [ -n "$line" ] && printf ' %s\n' "${line%"${line##*[! ]}"}"
+      ui_line '-'
+      [ -n "$err" ] && echo "${C_Y}${err}${C_0}"
+    } >&2
+    read -r -p "请选择（可多选，空格分隔，如 1 9 19 或 bj sh；回车=北京 上海 广东）: " choice </dev/tty || exit 1
+    read -r -a picks <<<"$choice"
+    [ "${#picks[@]}" -eq 0 ] && return 0
+    provs=()
+    err=""
+    for p in "${picks[@]}"; do
+      if [[ "$p" =~ ^[0-9]+$ ]] && [ $((10#$p)) -ge 1 ] && [ $((10#$p)) -le "${#TCP_PROV_ORDER[@]}" ]; then
+        name="${TCP_PROV_ORDER[$((10#$p - 1))]}"
+      elif ! name=$(tcp_province_from_code "$p"); then
+        err="无效的省份：$p，请重新选择"
+        break
+      fi
+      [[ " ${provs[*]} " == *" $name "* ]] || provs+=("$name")
+    done
+    if [ -z "$err" ]; then
+      OPT_PATH_PROVINCES=("${provs[@]}")
+      return 0
+    fi
+  done
 }
 
 # 协议选择：自动按检测结果，或指定 IPv4 / IPv6
@@ -4280,6 +4551,7 @@ selected_items() {
   [ "$TCP_ROUTE" -eq 1 ] && s+=("三网回程")
   [ "$TCP_LARGE" -eq 1 ] && s+=("大包回程")
   [ "$TCP_EDU" -eq 1 ] && s+=("教育网回程")
+  [ "$TCP_PATH" -eq 1 ] && s+=("三网回程路由")
   local IFS='/'
   echo "${s[*]}" | sed 's#/# / #g'
 }
@@ -4309,7 +4581,7 @@ run_checks() {
     [ "$fam" = 6 ] && { [ "$RUN_V6" -eq 1 ] || continue; }
     [ "$DO_IP" -eq 1 ] && ip_run "$fam"
   done
-  if [ $((TCP_ROUTE + TCP_LARGE + TCP_EDU)) -gt 0 ]; then
+  if [ $((TCP_ROUTE + TCP_LARGE + TCP_EDU + TCP_PATH)) -gt 0 ]; then
     if [ "$IS_ROOT" -eq 1 ]; then
       tcp_run
     else

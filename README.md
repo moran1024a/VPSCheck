@@ -4,7 +4,7 @@
 
 - **网络信息**：BGP、上游与接入、NAT 类型
 - **IP 质量**：基础信息、IP 类型、风险评分、风险因子、流媒体及 AI 解锁、邮局连通性、DNS 黑名单
-- **TCP 回程**：三网回程、大包回程、教育网回程（线路类型 / 延迟 / 丢包）
+- **TCP 回程**：三网回程、大包回程、教育网回程（线路类型 / 延迟 / 丢包），三网回程路由（逐跳）
 
 只在本机输出结果：**不上传检测结果、不做云端留档、不统计运行次数**，也不含任何测速。
 
@@ -24,20 +24,22 @@ bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/che
 bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/check.sh) -A -y
 ```
 
-不带检测项目参数时显示菜单（可多选，如 `2 3 5`；每步选完清屏），选完后再选测试协议：自动（按检测到的公网地址，双栈即两种都测）/ 仅 IPv4 / 仅 IPv6，已用 `-4` / `-6` 指定时跳过：
+不带检测项目参数时显示菜单（可多选，如 `2 3 5`；每步选完清屏）。单独选「三网回程路由」时再选省份（回车为北京 / 上海 / 广东，「全部检测」固定这三省）。最后选测试协议：自动（按检测到的公网地址，双栈即两种都测）/ 仅 IPv4 / 仅 IPv6，已用 `-4` / `-6` 指定时跳过：
 
 ```
-1. 全部检测   2. 网络信息   3. IP 质量   4. 所有回程
-5. 三网回程   6. 大包回程   7. 教育网回程   0. 退出      （4-7 需 root）
+1. 全部检测   2. 网络信息   3. IP 质量   4. 所有回程   5. 三网回程
+6. 大包回程   7. 教育网回程   8. 三网回程路由   0. 退出   （4-8 需 root）
 ```
 
 | 参数 | 说明 |
 |---|---|
 | `-A` / `-N` / `-I` | 全部 / 网络信息 / IP 质量 |
 | `-T` / `-R` / `-L` / `-E` | 所有回程 / 三网回程 / 大包回程（仅 IPv4）/ 教育网回程 |
+| `-P` | 三网回程路由（不含在 `-T` 中，含在 `-A` 中） |
 | `-4` / `-6` | 只测 IPv4 / IPv6 |
 | `-c NUM` | 回程每节点发包数（1-600，默认 25） |
 | `--province CODE` | 回程只测指定省份，可重复（`bj`、`gd` 或 `北京`） |
+| `--route-province CODE` | 三网回程路由的省份，可重复（默认 `bj`、`sh`、`gd`） |
 | `-o FILE` | 报告另存为纯文本 |
 | `-y` | 缺依赖时自动安装，不询问 |
 
@@ -79,8 +81,10 @@ bash <(curl -fsSL https://raw.githubusercontent.com/moran1024a/VPSCheck/main/che
 | 三网回程 | 31 省 × 电信 / 联通 / 移动，IPv4 与 IPv6；nping 发 TCP SYN，traceroute 识别线路（CN2GIA / CN2GT / CTGGIA / 163 / 4837 / 9929 / 10099 / CMIN2 / CMI 等） |
 | 大包回程 | 大包预检（识别服务商防火墙限制）后用大包探测，nexttrace-tiny 识别线路；仅 IPv4 |
 | 教育网回程 | 各省 CERNET（IPv4）/ CERNET2（IPv6），及进入教育网前的骨干网 |
+| 三网回程路由 | 所选省份三网的逐跳路由：跳数、延迟、IP、ASN、注册国家 / 地区、AS 名称，连续同一 ASN 的跳合并；附 ASN 路径与线路类型（本项目新增） |
 
 - 先识别线路、再统一发包，避免探测流量干扰路由识别；并行数按内存自动决定。
+- 三网回程路由只做 traceroute 与 Team Cymru ASN 查询，不发 nping；与三网回程同时运行且省份已覆盖时直接复用其追踪结果。归属地只到国家 / 地区（Team Cymru 注册信息），不查询城市级地理位置。
 - 节点从 TcpQuality 的 getNodes 服务实时获取，失败时用内置快照（2026-10-19，会随节点轮换逐渐过时）。
 - 缺 traceroute / nexttrace-tiny 时仍测延迟与丢包，线路显示「未识别」；单次路由追踪超过 240 秒（正常最坏约 180 秒）按失败处理，线路显示 `Hidden`。超过 10 列的线路标签把 `->` 缩写为 `>`。
 
@@ -92,7 +96,7 @@ Linux、bash 4+、curl。回程需要 root，非 root 时跳过回程、其余�
 |---|---|
 | 网络信息 | curl、jq；NAT 另需 sha256sum（stunclient 自动下载） |
 | IP 质量 | curl、jq、dig、nslookup、nc |
-| TCP 回程 | curl、nping（nmap）、traceroute；可选 nexttrace-tiny（从 [NTrace-core](https://github.com/nxtrace/NTrace-core) Release 下载，sha256 校验后装到 `/usr/local/bin`） |
+| TCP 回程 | curl、nping（nmap）、traceroute（三网回程路由只需 curl、traceroute）；可选 nexttrace-tiny（从 [NTrace-core](https://github.com/nxtrace/NTrace-core) Release 下载，sha256 校验后装到 `/usr/local/bin`） |
 
 缺依赖时列出安装命令；终端中回车或输入 `y` 才安装，非交互运行只在加 `-y` 时安装。
 
@@ -130,7 +134,7 @@ bin/                                    stunclient 静态二进制、编译脚�
   - 增加内置节点快照兜底、缺工具时降级运行、路由追踪保险超时、nexttrace-tiny 的 sha256 校验
 - **[xykt/NetQuality](https://github.com/xykt/NetQuality)**（BGP 兜底解析）：仅按字段兜底使用；修正上游数量误计 IRR 表；未移植网段活跃度
 
-以上部分均重新排版为统一的 80 列格式。RIPEstat / PeeringDB 查询、NAT 判定、公共层、菜单与主流程为本项目新写。
+以上部分均重新排版为统一的 80 列格式。RIPEstat / PeeringDB 查询、NAT 判定、三网回程路由、公共层、菜单与主流程为本项目新写。
 
 ## 许可证
 
